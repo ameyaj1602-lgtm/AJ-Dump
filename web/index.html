@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AJ Assistant - Voice Agent</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+            color: white;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            text-align: center;
+            padding: 2rem;
+            max-width: 500px;
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+        }
+
+        .subtitle {
+            color: #a0a0b8;
+            margin-bottom: 3rem;
+            font-size: 1.1rem;
+        }
+
+        /* Microphone Button */
+        .mic-button {
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            border: none;
+            background: linear-gradient(145deg, #6366f1, #8b5cf6);
+            color: white;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 2rem;
+            transition: all 0.3s ease;
+            box-shadow: 0 8px 32px rgba(99, 102, 241, 0.4);
+            position: relative;
+        }
+
+        .mic-button:hover {
+            transform: scale(1.05);
+            box-shadow: 0 12px 40px rgba(99, 102, 241, 0.6);
+        }
+
+        .mic-button.active {
+            background: linear-gradient(145deg, #ef4444, #f97316);
+            box-shadow: 0 8px 32px rgba(239, 68, 68, 0.4);
+            animation: pulse 2s infinite;
+        }
+
+        .mic-button svg {
+            width: 48px;
+            height: 48px;
+        }
+
+        @keyframes pulse {
+            0%, 100% { box-shadow: 0 8px 32px rgba(239, 68, 68, 0.4); }
+            50% { box-shadow: 0 8px 48px rgba(239, 68, 68, 0.7); }
+        }
+
+        /* Status */
+        .status {
+            font-size: 1.1rem;
+            margin-bottom: 1rem;
+            min-height: 1.5rem;
+        }
+
+        .status.connected { color: #4ade80; }
+        .status.connecting { color: #fbbf24; }
+        .status.error { color: #f87171; }
+
+        /* Transcript */
+        .transcript-box {
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+            min-height: 100px;
+            max-height: 300px;
+            overflow-y: auto;
+            text-align: left;
+        }
+
+        .transcript-box h3 {
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.1em;
+            color: #a0a0b8;
+            margin-bottom: 1rem;
+        }
+
+        .transcript-entry {
+            margin-bottom: 0.75rem;
+            line-height: 1.5;
+        }
+
+        .transcript-entry .speaker {
+            font-weight: 600;
+            color: #8b5cf6;
+        }
+
+        .transcript-entry .speaker.agent {
+            color: #4ade80;
+        }
+
+        /* Setup Notice */
+        .setup-notice {
+            background: rgba(251, 191, 36, 0.1);
+            border: 1px solid rgba(251, 191, 36, 0.3);
+            border-radius: 12px;
+            padding: 1.25rem;
+            margin-top: 2rem;
+            font-size: 0.9rem;
+            color: #fbbf24;
+            line-height: 1.6;
+        }
+
+        .setup-notice code {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 0.15em 0.4em;
+            border-radius: 4px;
+            font-size: 0.85em;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>AJ Assistant</h1>
+        <p class="subtitle">Your personal voice assistant</p>
+
+        <button class="mic-button" id="micBtn" onclick="toggleConnection()">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+            </svg>
+        </button>
+
+        <div class="status" id="status">Click the microphone to start</div>
+
+        <div class="transcript-box" id="transcriptBox" style="display: none;">
+            <h3>Conversation</h3>
+            <div id="transcript"></div>
+        </div>
+
+        <div class="setup-notice" id="setupNotice">
+            To use this web interface, you need your LiveKit agent running.<br>
+            Run <code>python agent.py dev</code> in your terminal first, then connect here.
+        </div>
+    </div>
+
+    <!-- LiveKit Client SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
+    <script>
+        // ============================================
+        // Configuration
+        // ============================================
+        // When running locally, your agent will be at this URL.
+        // Update this if you deploy to the cloud.
+        const LIVEKIT_URL = localStorage.getItem('livekit_url') || '';
+
+        let room = null;
+        let isConnected = false;
+
+        // ============================================
+        // Main Functions
+        // ============================================
+
+        async function toggleConnection() {
+            if (isConnected) {
+                disconnect();
+            } else {
+                await connect();
+            }
+        }
+
+        async function connect() {
+            const livekitUrl = LIVEKIT_URL || prompt(
+                'Enter your LiveKit URL (from .env file):\n' +
+                'Example: wss://your-project.livekit.cloud'
+            );
+
+            if (!livekitUrl) return;
+
+            // Save for next time
+            localStorage.setItem('livekit_url', livekitUrl);
+
+            const token = prompt(
+                'Enter a LiveKit token:\n' +
+                'Generate one at: https://cloud.livekit.io\n' +
+                '(Go to your project > Playground > copy the token)'
+            );
+
+            if (!token) return;
+
+            setStatus('Connecting...', 'connecting');
+
+            try {
+                room = new LivekitClient.Room({
+                    audioCaptureDefaults: { autoGainControl: true, noiseSuppression: true },
+                    adaptiveStream: true,
+                });
+
+                // Listen for audio from the agent
+                room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
+                    if (track.kind === 'audio') {
+                        const element = track.attach();
+                        document.body.appendChild(element);
+                        addTranscript('agent', '(Agent is speaking...)');
+                    }
+                });
+
+                room.on(LivekitClient.RoomEvent.Disconnected, () => {
+                    disconnect();
+                });
+
+                room.on(LivekitClient.RoomEvent.DataReceived, (payload, participant) => {
+                    try {
+                        const data = JSON.parse(new TextDecoder().decode(payload));
+                        if (data.text) {
+                            const speaker = participant?.identity?.includes('agent') ? 'agent' : 'you';
+                            addTranscript(speaker, data.text);
+                        }
+                    } catch (e) { /* ignore non-JSON data */ }
+                });
+
+                await room.connect(livekitUrl, token);
+
+                // Publish your microphone
+                await room.localParticipant.setMicrophoneEnabled(true);
+
+                isConnected = true;
+                document.getElementById('micBtn').classList.add('active');
+                document.getElementById('transcriptBox').style.display = 'block';
+                document.getElementById('setupNotice').style.display = 'none';
+                setStatus('Connected - speak now!', 'connected');
+
+            } catch (error) {
+                console.error('Connection failed:', error);
+                setStatus('Connection failed. Check your URL and token.', 'error');
+            }
+        }
+
+        function disconnect() {
+            if (room) {
+                room.disconnect();
+                room = null;
+            }
+            isConnected = false;
+            document.getElementById('micBtn').classList.remove('active');
+            setStatus('Disconnected. Click to reconnect.', '');
+        }
+
+        // ============================================
+        // Helper Functions
+        // ============================================
+
+        function setStatus(text, className) {
+            const el = document.getElementById('status');
+            el.textContent = text;
+            el.className = 'status ' + (className || '');
+        }
+
+        function addTranscript(speaker, text) {
+            const el = document.getElementById('transcript');
+            const entry = document.createElement('div');
+            entry.className = 'transcript-entry';
+            entry.innerHTML = `<span class="speaker ${speaker}">${speaker === 'agent' ? 'Assistant' : 'You'}:</span> ${escapeHtml(text)}`;
+            el.appendChild(entry);
+            el.parentElement.scrollTop = el.parentElement.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+    </script>
+</body>
+</html>
