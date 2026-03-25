@@ -1,12 +1,12 @@
-# AJ Assistant - Voice Agent
+# AJ Assistant - Voice Agent (Node.js)
 
 A personal voice assistant you can talk to via **phone** or **web browser**.
 
-Built with [LiveKit Agents](https://docs.livekit.io/agents/) + [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime).
+Built with [LiveKit Agents (Node.js)](https://docs.livekit.io/agents/) + [OpenAI Realtime API](https://platform.openai.com/docs/guides/realtime).
 
 ---
 
-## Quick Start (15 minutes)
+## Quick Start
 
 ### Step 1: Get Your API Keys
 
@@ -23,42 +23,34 @@ You need two accounts (both have free tiers):
    - Go to **Settings > Keys**
    - Copy your **URL**, **API Key**, and **API Secret**
 
-### Step 2: Set Up Your Environment
+### Step 2: Install Node.js
+
+Download and install Node.js (v18 or higher) from: https://nodejs.org
+
+Verify it's installed:
+```bash
+node --version   # Should show v18.x.x or higher
+npm --version    # Should show 9.x.x or higher
+```
+
+### Step 3: Set Up the Project
 
 ```bash
-# 1. Install Python (if you don't have it)
-# Download from: https://www.python.org/downloads/
-# Make sure to check "Add Python to PATH" during install
-
-# 2. Clone this repo (or download it)
+# 1. Clone this repo (or download it)
 git clone https://github.com/ameyaj1602-lgtm/aj-dump.git
 cd aj-dump
 
-# 3. Create a virtual environment
-python -m venv venv
+# 2. Install dependencies
+npm install
 
-# 4. Activate it
-# On Mac/Linux:
-source venv/bin/activate
-# On Windows:
-venv\Scripts\activate
-
-# 5. Install dependencies
-pip install -r requirements.txt
-```
-
-### Step 3: Add Your API Keys
-
-```bash
-# Copy the example env file
+# 3. Copy the env template
 cp .env.example .env
-
-# Open .env in any text editor and paste your keys
-# On Mac: open .env
-# On Windows: notepad .env
 ```
 
-Fill in these values in `.env`:
+### Step 4: Add Your API Keys
+
+Open `.env` in any text editor and paste your keys:
+
 ```
 OPENAI_API_KEY=sk-your-actual-key
 LIVEKIT_URL=wss://your-project.livekit.cloud
@@ -66,60 +58,68 @@ LIVEKIT_API_KEY=your-key
 LIVEKIT_API_SECRET=your-secret
 ```
 
-### Step 4: Run the Agent
+### Step 5: Run the Agent
 
 ```bash
-python agent.py dev
+npm run dev
 ```
 
-You should see: `Agent started successfully` in the terminal.
+You should see `Agent started successfully` in the terminal.
 
 ---
 
-## Using the Web Interface
+## Talk to Your Agent
 
-1. Make sure the agent is running (`python agent.py dev`)
+### Option A: LiveKit Playground (Easiest)
+1. Make sure the agent is running (`npm run dev`)
 2. Go to https://cloud.livekit.io
 3. Open your project > **Playground**
 4. Click **Connect** — you'll hear the assistant greet you!
 
-**Or** open `web/index.html` in your browser for a custom interface.
+### Option B: Custom Web Interface
+Open `web/index.html` in your browser.
 
 ---
 
 ## Adding Phone Calls (Optional)
 
-To let people call a real phone number and talk to your agent:
-
-### Step 1: Set Up Twilio
-
 1. Sign up at https://www.twilio.com
 2. Buy a phone number ($1/month)
 3. Add your Twilio credentials to `.env`
-
-### Step 2: Connect Twilio to LiveKit
-
-1. In LiveKit Cloud, go to **Settings > SIP**
-2. Follow the guide to create a SIP Trunk
-3. Point your Twilio number to the LiveKit SIP endpoint
-4. Full guide: https://docs.livekit.io/agents/quickstarts/sip-telephony/
-
-Now people can call your Twilio number and talk to AJ Assistant!
+4. In LiveKit Cloud, go to **Settings > SIP** and create a SIP Trunk
+5. Full guide: https://docs.livekit.io/agents/quickstarts/sip-telephony/
 
 ---
 
 ## Customizing Your Agent
 
-Open `agent.py` and edit the `VoiceAssistant` class:
+Open `agent.js` and edit the `AGENT_CONFIG` object:
 
-```python
-class VoiceAssistant:
-    AGENT_NAME = "AJ Assistant"     # Change the name
-    INSTRUCTIONS = "..."             # Change the personality & knowledge
-    VOICE = "shimmer"                # Change the voice
+```javascript
+const AGENT_CONFIG = {
+  name: "AJ Assistant",       // Change the name
+  instructions: "...",         // Change the personality & knowledge
+  voice: "shimmer",            // Change the voice
+  greeting: "Hey there!...",   // Change the greeting
+};
 ```
 
 **Available voices:** `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`
+
+---
+
+## Project Structure
+
+```
+aj-dump/
+├── agent.js           # The voice agent (main file)
+├── package.json       # Node.js dependencies
+├── .env.example       # Template for API keys
+├── .env               # Your actual API keys (not in git)
+├── web/
+│   └── index.html     # Browser interface
+└── README.md          # This file
+```
 
 ---
 
@@ -127,10 +127,11 @@ class VoiceAssistant:
 
 | Problem | Solution |
 |---------|----------|
-| `ModuleNotFoundError` | Run `pip install -r requirements.txt` again |
+| `MODULE_NOT_FOUND` | Run `npm install` again |
 | Agent won't start | Check that `.env` has all keys filled in |
 | No audio in browser | Allow microphone access when prompted |
 | "Connection failed" on web | Make sure agent is running first |
+| Node version error | Upgrade to Node.js v18+ from https://nodejs.org |
 
 ---
 
@@ -141,18 +142,3 @@ class VoiceAssistant:
 - **Twilio** (optional): ~$1/month for number + ~$0.02/min for calls
 
 A typical 5-minute conversation costs roughly $1.50 in API fees.
-
----
-
-## Project Structure
-
-```
-aj-dump/
-├── agent.py           # The voice agent (main file)
-├── requirements.txt   # Python packages needed
-├── .env.example       # Template for API keys
-├── .env               # Your actual API keys (not in git)
-├── web/
-│   └── index.html     # Browser interface
-└── README.md          # This file
-```
