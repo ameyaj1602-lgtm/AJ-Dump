@@ -68,7 +68,6 @@ Voice Guidelines:
 // ---- Validate env ---- //
 const missing = [];
 if (!process.env.OPENAI_API_KEY) missing.push("OPENAI_API_KEY");
-if (!process.env.ELEVEN_API_KEY) missing.push("ELEVEN_API_KEY");
 if (!process.env.DEEPGRAM_API_KEY) missing.push("DEEPGRAM_API_KEY");
 if (missing.length > 0) {
   console.error(`\n  Missing env vars: ${missing.join(", ")}`);
@@ -79,7 +78,9 @@ if (missing.length > 0) {
 // ---- Initialize clients ---- //
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-const elevenlabs = new ElevenLabsClient({ apiKey: process.env.ELEVEN_API_KEY });
+const elevenlabs = process.env.ELEVEN_API_KEY
+  ? new ElevenLabsClient({ apiKey: process.env.ELEVEN_API_KEY })
+  : null;
 
 // ---- Express + WebSocket server ---- //
 const app = express();
@@ -130,20 +131,44 @@ wss.on("connection", (ws) => {
       messages.push({ role: "assistant", content: reply });
       sendJSON({ type: "transcript", speaker: "ava", text: reply });
 
-      // ElevenLabs TTS
-      console.log("[elevenlabs] Speaking...");
-      const audioStream = await elevenlabs.textToSpeech.convertAsStream(
-        ELEVENLABS_VOICE,
-        {
-          text: reply,
-          model_id: ELEVENLABS_MODEL,
-          output_format: "mp3_44100_128",
-        }
-      );
+      // TTS — try ElevenLabs first, fallback to OpenAI
+      let ttsSuccess = false;
 
-      for await (const chunk of audioStream) {
+      if (elevenlabs) {
+        try {
+          console.log("[elevenlabs] Speaking...");
+          const audioStream = await elevenlabs.textToSpeech.convertAsStream(
+            ELEVENLABS_VOICE,
+            {
+              text: reply,
+              model_id: ELEVENLABS_MODEL,
+              output_format: "mp3_44100_128",
+            }
+          );
+
+          for await (const chunk of audioStream) {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(chunk);
+            }
+          }
+          ttsSuccess = true;
+        } catch (err) {
+          console.log(`[elevenlabs] Failed (${err.message}), falling back to OpenAI TTS`);
+        }
+      }
+
+      if (!ttsSuccess) {
+        console.log("[openai-tts] Speaking...");
+        const ttsResponse = await openai.audio.speech.create({
+          model: "tts-1",
+          voice: "nova", // warm female voice
+          input: reply,
+          response_format: "mp3",
+        });
+
+        const buffer = Buffer.from(await ttsResponse.arrayBuffer());
         if (ws.readyState === ws.OPEN) {
-          ws.send(chunk);
+          ws.send(buffer);
         }
       }
 
