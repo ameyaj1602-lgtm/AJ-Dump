@@ -20,8 +20,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // ---- Config ---- //
 const PORT = 3000;
-const ELEVENLABS_VOICE = "aria";
-const ELEVENLABS_MODEL = "eleven_turbo_v2_5";
+const ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // "Rachel" - warm female voice
+const ELEVENLABS_MODEL = "eleven_multilingual_v2";
 const GPT_MODEL = "gpt-4o";
 
 const SYSTEM_PROMPT = `
