@@ -3,13 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>AJ Assistant - Voice Agent</title>
+    <title>Ava — Your Therapy Companion</title>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -25,25 +21,27 @@
         .container {
             text-align: center;
             padding: 2rem;
-            max-width: 500px;
+            max-width: 600px;
+            width: 100%;
         }
 
         h1 {
-            font-size: 2rem;
-            margin-bottom: 0.5rem;
-            font-weight: 600;
+            font-size: 2.5rem;
+            margin-bottom: 0.25rem;
+            font-weight: 300;
+            letter-spacing: 0.1em;
         }
 
         .subtitle {
             color: #a0a0b8;
             margin-bottom: 3rem;
-            font-size: 1.1rem;
+            font-size: 1rem;
         }
 
-        /* Microphone Button */
+        /* Mic Button */
         .mic-button {
-            width: 120px;
-            height: 120px;
+            width: 140px;
+            height: 140px;
             border-radius: 50%;
             border: none;
             background: linear-gradient(145deg, #6366f1, #8b5cf6);
@@ -55,7 +53,6 @@
             margin: 0 auto 2rem;
             transition: all 0.3s ease;
             box-shadow: 0 8px 32px rgba(99, 102, 241, 0.4);
-            position: relative;
         }
 
         .mic-button:hover {
@@ -63,32 +60,29 @@
             box-shadow: 0 12px 40px rgba(99, 102, 241, 0.6);
         }
 
-        .mic-button.active {
-            background: linear-gradient(145deg, #ef4444, #f97316);
-            box-shadow: 0 8px 32px rgba(239, 68, 68, 0.4);
+        .mic-button.listening {
+            background: linear-gradient(145deg, #ec4899, #f97316);
+            box-shadow: 0 8px 32px rgba(236, 72, 153, 0.4);
             animation: pulse 2s infinite;
         }
 
-        .mic-button svg {
-            width: 48px;
-            height: 48px;
-        }
+        .mic-button svg { width: 56px; height: 56px; }
 
         @keyframes pulse {
-            0%, 100% { box-shadow: 0 8px 32px rgba(239, 68, 68, 0.4); }
-            50% { box-shadow: 0 8px 48px rgba(239, 68, 68, 0.7); }
+            0%, 100% { box-shadow: 0 8px 32px rgba(236, 72, 153, 0.4); }
+            50% { box-shadow: 0 8px 48px rgba(236, 72, 153, 0.7); }
         }
 
-        /* Status */
         .status {
-            font-size: 1.1rem;
-            margin-bottom: 1rem;
+            font-size: 1rem;
+            margin-bottom: 1.5rem;
             min-height: 1.5rem;
+            color: #a0a0b8;
         }
 
         .status.connected { color: #4ade80; }
-        .status.connecting { color: #fbbf24; }
         .status.error { color: #f87171; }
+        .status.speaking { color: #ec4899; }
 
         /* Transcript */
         .transcript-box {
@@ -96,205 +90,216 @@
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 16px;
             padding: 1.5rem;
-            margin-top: 2rem;
-            min-height: 100px;
-            max-height: 300px;
+            margin-top: 1.5rem;
+            min-height: 120px;
+            max-height: 400px;
             overflow-y: auto;
             text-align: left;
         }
 
-        .transcript-box h3 {
-            font-size: 0.85rem;
-            text-transform: uppercase;
-            letter-spacing: 0.1em;
-            color: #a0a0b8;
-            margin-bottom: 1rem;
-        }
-
         .transcript-entry {
             margin-bottom: 0.75rem;
-            line-height: 1.5;
+            line-height: 1.6;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         .transcript-entry .speaker {
             font-weight: 600;
-            color: #8b5cf6;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }
 
-        .transcript-entry .speaker.agent {
-            color: #4ade80;
-        }
+        .transcript-entry .speaker.user { color: #8b5cf6; }
+        .transcript-entry .speaker.ava { color: #ec4899; }
 
-        /* Setup Notice */
-        .setup-notice {
-            background: rgba(251, 191, 36, 0.1);
-            border: 1px solid rgba(251, 191, 36, 0.3);
-            border-radius: 12px;
-            padding: 1.25rem;
-            margin-top: 2rem;
-            font-size: 0.9rem;
-            color: #fbbf24;
-            line-height: 1.6;
-        }
-
-        .setup-notice code {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 0.15em 0.4em;
-            border-radius: 4px;
-            font-size: 0.85em;
+        .transcript-entry .text {
+            display: block;
+            margin-top: 0.2rem;
+            color: #e0e0e8;
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>AJ Assistant</h1>
-        <p class="subtitle">Your personal voice assistant</p>
+        <h1>Ava</h1>
+        <p class="subtitle">your therapy companion</p>
 
-        <button class="mic-button" id="micBtn" onclick="toggleConnection()">
+        <button class="mic-button" id="micBtn" onclick="toggleMic()">
             <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
                 <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
             </svg>
         </button>
 
-        <div class="status" id="status">Click the microphone to start</div>
+        <div class="status" id="status">Tap the mic to start talking to Ava</div>
 
-        <div class="transcript-box" id="transcriptBox" style="display: none;">
-            <h3>Conversation</h3>
+        <div class="transcript-box" id="transcriptBox">
             <div id="transcript"></div>
-        </div>
-
-        <div class="setup-notice" id="setupNotice">
-            To use this web interface, you need your LiveKit agent running.<br>
-            Run <code>python agent.py dev</code> in your terminal first, then connect here.
         </div>
     </div>
 
-    <!-- LiveKit Client SDK -->
-    <script src="https://cdn.jsdelivr.net/npm/livekit-client@2/dist/livekit-client.umd.js"></script>
     <script>
-        // ============================================
-        // Configuration
-        // ============================================
-        // When running locally, your agent will be at this URL.
-        // Update this if you deploy to the cloud.
-        const LIVEKIT_URL = localStorage.getItem('livekit_url') || '';
+        let ws = null;
+        let mediaStream = null;
+        let audioContext = null;
+        let processor = null;
+        let isListening = false;
+        let audioQueue = [];
+        let isPlaying = false;
+        let currentAudioChunks = [];
 
-        let room = null;
-        let isConnected = false;
-
-        // ============================================
-        // Main Functions
-        // ============================================
-
-        async function toggleConnection() {
-            if (isConnected) {
-                disconnect();
-            } else {
-                await connect();
-            }
-        }
-
-        async function connect() {
-            const livekitUrl = LIVEKIT_URL || prompt(
-                'Enter your LiveKit URL (from .env file):\n' +
-                'Example: wss://your-project.livekit.cloud'
-            );
-
-            if (!livekitUrl) return;
-
-            // Save for next time
-            localStorage.setItem('livekit_url', livekitUrl);
-
-            const token = prompt(
-                'Enter a LiveKit token:\n' +
-                'Generate one at: https://cloud.livekit.io\n' +
-                '(Go to your project > Playground > copy the token)'
-            );
-
-            if (!token) return;
-
-            setStatus('Connecting...', 'connecting');
-
-            try {
-                room = new LivekitClient.Room({
-                    audioCaptureDefaults: { autoGainControl: true, noiseSuppression: true },
-                    adaptiveStream: true,
-                });
-
-                // Listen for audio from the agent
-                room.on(LivekitClient.RoomEvent.TrackSubscribed, (track, publication, participant) => {
-                    if (track.kind === 'audio') {
-                        const element = track.attach();
-                        document.body.appendChild(element);
-                        addTranscript('agent', '(Agent is speaking...)');
-                    }
-                });
-
-                room.on(LivekitClient.RoomEvent.Disconnected, () => {
-                    disconnect();
-                });
-
-                room.on(LivekitClient.RoomEvent.DataReceived, (payload, participant) => {
-                    try {
-                        const data = JSON.parse(new TextDecoder().decode(payload));
-                        if (data.text) {
-                            const speaker = participant?.identity?.includes('agent') ? 'agent' : 'you';
-                            addTranscript(speaker, data.text);
-                        }
-                    } catch (e) { /* ignore non-JSON data */ }
-                });
-
-                await room.connect(livekitUrl, token);
-
-                // Publish your microphone
-                await room.localParticipant.setMicrophoneEnabled(true);
-
-                isConnected = true;
-                document.getElementById('micBtn').classList.add('active');
-                document.getElementById('transcriptBox').style.display = 'block';
-                document.getElementById('setupNotice').style.display = 'none';
-                setStatus('Connected - speak now!', 'connected');
-
-            } catch (error) {
-                console.error('Connection failed:', error);
-                setStatus('Connection failed. Check your URL and token.', 'error');
-            }
-        }
-
-        function disconnect() {
-            if (room) {
-                room.disconnect();
-                room = null;
-            }
-            isConnected = false;
-            document.getElementById('micBtn').classList.remove('active');
-            setStatus('Disconnected. Click to reconnect.', '');
-        }
-
-        // ============================================
-        // Helper Functions
-        // ============================================
-
-        function setStatus(text, className) {
-            const el = document.getElementById('status');
+        function setStatus(text, cls) {
+            const el = document.getElementById("status");
             el.textContent = text;
-            el.className = 'status ' + (className || '');
+            el.className = "status " + (cls || "");
         }
 
         function addTranscript(speaker, text) {
-            const el = document.getElementById('transcript');
-            const entry = document.createElement('div');
-            entry.className = 'transcript-entry';
-            entry.innerHTML = `<span class="speaker ${speaker}">${speaker === 'agent' ? 'Assistant' : 'You'}:</span> ${escapeHtml(text)}`;
+            const el = document.getElementById("transcript");
+            const entry = document.createElement("div");
+            entry.className = "transcript-entry";
+            entry.innerHTML = `<span class="speaker ${speaker}">${speaker === "ava" ? "Ava" : "You"}</span><span class="text">${escapeHtml(text)}</span>`;
             el.appendChild(entry);
             el.parentElement.scrollTop = el.parentElement.scrollHeight;
         }
 
         function escapeHtml(text) {
-            const div = document.createElement('div');
+            const div = document.createElement("div");
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        async function toggleMic() {
+            if (isListening) {
+                stopListening();
+            } else {
+                await startListening();
+            }
+        }
+
+        async function startListening() {
+            try {
+                // Get microphone access
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        sampleRate: 16000,
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true,
+                    }
+                });
+
+                // Connect WebSocket to our local server
+                ws = new WebSocket(`ws://${window.location.host}`);
+                ws.binaryType = "arraybuffer";
+
+                ws.onopen = () => {
+                    console.log("Connected to Ava server");
+                    ws.send(JSON.stringify({ type: "start" }));
+                    setStatus("Listening... speak to Ava", "connected");
+                    startAudioCapture();
+                };
+
+                ws.onmessage = (event) => {
+                    if (typeof event.data === "string") {
+                        const msg = JSON.parse(event.data);
+                        if (msg.type === "transcript") {
+                            addTranscript(msg.speaker, msg.text);
+                            if (msg.speaker === "ava") {
+                                setStatus("Ava is speaking...", "speaking");
+                            }
+                        } else if (msg.type === "audio_end") {
+                            // Play collected audio
+                            playCollectedAudio();
+                        } else if (msg.type === "error") {
+                            setStatus("Error: " + msg.message, "error");
+                        }
+                    } else {
+                        // Binary = audio data from ElevenLabs
+                        currentAudioChunks.push(new Uint8Array(event.data));
+                    }
+                };
+
+                ws.onclose = () => {
+                    setStatus("Disconnected", "");
+                    stopListening();
+                };
+
+                ws.onerror = (err) => {
+                    setStatus("Connection error — is the server running?", "error");
+                };
+
+                isListening = true;
+                document.getElementById("micBtn").classList.add("listening");
+
+            } catch (err) {
+                console.error("Mic error:", err);
+                setStatus("Mic access denied — please allow microphone", "error");
+            }
+        }
+
+        function startAudioCapture() {
+            audioContext = new AudioContext({ sampleRate: 16000 });
+            const source = audioContext.createMediaStreamSource(mediaStream);
+
+            // Use ScriptProcessorNode (widely supported)
+            processor = audioContext.createScriptProcessor(4096, 1, 1);
+            processor.onaudioprocess = (e) => {
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    // Convert float32 to int16
+                    const int16 = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        int16[i] = Math.max(-32768, Math.min(32767, inputData[i] * 32768));
+                    }
+                    ws.send(int16.buffer);
+                }
+            };
+
+            source.connect(processor);
+            processor.connect(audioContext.destination);
+        }
+
+        function stopListening() {
+            isListening = false;
+            document.getElementById("micBtn").classList.remove("listening");
+
+            if (processor) { processor.disconnect(); processor = null; }
+            if (audioContext) { audioContext.close(); audioContext = null; }
+            if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+            if (ws) { ws.close(); ws = null; }
+
+            setStatus("Tap the mic to start talking to Ava", "");
+        }
+
+        async function playCollectedAudio() {
+            if (currentAudioChunks.length === 0) return;
+
+            // Combine all chunks into one blob
+            const blob = new Blob(currentAudioChunks, { type: "audio/mpeg" });
+            currentAudioChunks = [];
+
+            const url = URL.createObjectURL(blob);
+            const audio = new Audio(url);
+
+            audio.onended = () => {
+                URL.revokeObjectURL(url);
+                setStatus("Listening... speak to Ava", "connected");
+            };
+
+            try {
+                await audio.play();
+            } catch (err) {
+                console.error("Playback error:", err);
+                setStatus("Listening... speak to Ava", "connected");
+            }
         }
     </script>
 </body>
