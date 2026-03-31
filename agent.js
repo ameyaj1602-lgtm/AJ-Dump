@@ -75,7 +75,7 @@ export default {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   cli.runApp(
     new WorkerOptions({
-      agent: import.meta.filename,
+      agent: fileURLToPath(import.meta.url),
     })
   );
 }
