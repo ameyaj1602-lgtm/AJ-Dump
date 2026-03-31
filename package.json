@@ -2,7 +2,7 @@
   "name": "aj-voice-agent",
   "version": "1.0.0",
   "description": "AJ's Personal Voice Assistant - Node.js",
-  "main": "agent.js",
+  "type": "module",
   "scripts": {
     "dev": "node agent.js dev",
     "start": "node agent.js start"
