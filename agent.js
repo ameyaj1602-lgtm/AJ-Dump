@@ -58,7 +58,9 @@ export default {
       llm: model,
     });
 
-    const session = new voice.AgentSession();
+    const session = new voice.AgentSession({
+      llm: model,
+    });
 
     await session.start({
       room: ctx.room,
