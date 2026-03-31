@@ -3,7 +3,7 @@
  * ====================================
  * No LiveKit. No cloud middleman. Just a local server.
  *
- * Browser (mic) ←→ This Server ←→ Deepgram + GPT-4o + ElevenLabs
+ * Browser (mic) ←→ This Server ←→ Deepgram + Gemini + ElevenLabs
  */
 
 import "dotenv/config";
@@ -12,7 +12,6 @@ import { WebSocketServer } from "ws";
 import { createServer } from "http";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
-import OpenAI from "openai";
 import { createClient } from "@deepgram/sdk";
 import { ElevenLabsClient } from "elevenlabs";
 
@@ -22,7 +21,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = 3000;
 const ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // "Rachel" - warm female voice
 const ELEVENLABS_MODEL = "eleven_multilingual_v2";
-const GPT_MODEL = "gpt-4o";
+const GEMINI_MODEL = "gemini-2.5-flash";
 
 const SYSTEM_PROMPT = `
 You are "Ava" — AJ's personal therapy companion and best friend. You are warm,
@@ -67,7 +66,8 @@ Voice Guidelines:
 
 // ---- Validate env ---- //
 const missing = [];
-if (!process.env.OPENAI_API_KEY) missing.push("OPENAI_API_KEY");
+if (!process.env.GEMINI_API_KEY) missing.push("GEMINI_API_KEY");
+if (!process.env.ELEVEN_API_KEY) missing.push("ELEVEN_API_KEY");
 if (!process.env.DEEPGRAM_API_KEY) missing.push("DEEPGRAM_API_KEY");
 if (missing.length > 0) {
   console.error(`\n  Missing env vars: ${missing.join(", ")}`);
@@ -76,11 +76,50 @@ if (missing.length > 0) {
 }
 
 // ---- Initialize clients ---- //
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const deepgram = createClient(process.env.DEEPGRAM_API_KEY);
-const elevenlabs = process.env.ELEVEN_API_KEY
-  ? new ElevenLabsClient({ apiKey: process.env.ELEVEN_API_KEY })
-  : null;
+const elevenlabs = new ElevenLabsClient({ apiKey: process.env.ELEVEN_API_KEY });
+
+// Gemini API via REST (no extra SDK needed)
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent?key=${process.env.GEMINI_API_KEY}`;
+
+async function callGemini(messages) {
+  // Convert chat format to Gemini format
+  const contents = [];
+  for (const msg of messages) {
+    if (msg.role === "system") continue; // handled separately
+    contents.push({
+      role: msg.role === "assistant" ? "model" : "user",
+      parts: [{ text: msg.content }],
+    });
+  }
+
+  const systemInstruction = messages.find((m) => m.role === "system");
+
+  const body = {
+    contents,
+    systemInstruction: systemInstruction
+      ? { parts: [{ text: systemInstruction.content }] }
+      : undefined,
+    generationConfig: {
+      temperature: 0.8,
+      maxOutputTokens: 300,
+    },
+  };
+
+  const res = await fetch(GEMINI_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Gemini ${res.status}: ${errText}`);
+  }
+
+  const data = await res.json();
+  return data.candidates?.[0]?.content?.parts?.[0]?.text || null;
+}
 
 // ---- Express + WebSocket server ---- //
 const app = express();
@@ -100,7 +139,6 @@ wss.on("connection", (ws) => {
   let isProcessing = false;
   let pendingTranscript = "";
 
-  // Send JSON safely
   function sendJSON(obj) {
     if (ws.readyState === ws.OPEN) {
       ws.send(JSON.stringify(obj));
@@ -115,60 +153,29 @@ wss.on("connection", (ws) => {
     try {
       messages.push({ role: "user", content: userText });
 
-      // GPT-4o
-      console.log("[gpt-4o] Thinking...");
-      const completion = await openai.chat.completions.create({
-        model: GPT_MODEL,
-        messages,
-        temperature: 0.8,
-        max_tokens: 300,
-      });
-
-      const reply = completion.choices[0]?.message?.content;
+      // Gemini
+      console.log("[gemini] Thinking...");
+      const reply = await callGemini(messages);
       if (!reply) { isProcessing = false; return; }
 
       console.log(`[ava] ${reply}`);
       messages.push({ role: "assistant", content: reply });
       sendJSON({ type: "transcript", speaker: "ava", text: reply });
 
-      // TTS — try ElevenLabs first, fallback to OpenAI
-      let ttsSuccess = false;
-
-      if (elevenlabs) {
-        try {
-          console.log("[elevenlabs] Speaking...");
-          const audioStream = await elevenlabs.textToSpeech.convertAsStream(
-            ELEVENLABS_VOICE,
-            {
-              text: reply,
-              model_id: ELEVENLABS_MODEL,
-              output_format: "mp3_44100_128",
-            }
-          );
-
-          for await (const chunk of audioStream) {
-            if (ws.readyState === ws.OPEN) {
-              ws.send(chunk);
-            }
-          }
-          ttsSuccess = true;
-        } catch (err) {
-          console.log(`[elevenlabs] Failed (${err.message}), falling back to OpenAI TTS`);
+      // ElevenLabs TTS
+      console.log("[elevenlabs] Speaking...");
+      const audioStream = await elevenlabs.textToSpeech.convertAsStream(
+        ELEVENLABS_VOICE,
+        {
+          text: reply,
+          model_id: ELEVENLABS_MODEL,
+          output_format: "mp3_44100_128",
         }
-      }
+      );
 
-      if (!ttsSuccess) {
-        console.log("[openai-tts] Speaking...");
-        const ttsResponse = await openai.audio.speech.create({
-          model: "tts-1",
-          voice: "nova", // warm female voice
-          input: reply,
-          response_format: "mp3",
-        });
-
-        const buffer = Buffer.from(await ttsResponse.arrayBuffer());
+      for await (const chunk of audioStream) {
         if (ws.readyState === ws.OPEN) {
-          ws.send(buffer);
+          ws.send(chunk);
         }
       }
 
@@ -183,20 +190,16 @@ wss.on("connection", (ws) => {
 
   // Handle incoming messages
   ws.on("message", (data, isBinary) => {
-    // Text message = control
     if (!isBinary) {
       try {
         const msg = JSON.parse(data.toString());
         if (msg.type === "start") {
           startDeepgram();
         }
-      } catch (e) {
-        // ignore parse errors
-      }
+      } catch (e) {}
       return;
     }
 
-    // Binary = audio from mic
     if (dgConnection && dgReady) {
       dgConnection.send(data);
     }
@@ -224,8 +227,6 @@ wss.on("connection", (ws) => {
         console.log("[deepgram] Connected");
         dgReady = true;
         sendJSON({ type: "status", text: "Listening..." });
-
-        // Greet the user
         generateResponse("(User just connected, greet them warmly)");
       });
 
@@ -245,7 +246,6 @@ wss.on("connection", (ws) => {
       });
 
       dgConnection.on("UtteranceEnd", () => {
-        // User stopped talking — generate response
         if (pendingTranscript.trim() && !isProcessing) {
           const text = pendingTranscript.trim();
           pendingTranscript = "";
@@ -264,7 +264,6 @@ wss.on("connection", (ws) => {
       });
     } catch (err) {
       console.error("[deepgram] Failed to start:", err.message);
-      sendJSON({ type: "error", message: "Failed to connect to Deepgram: " + err.message });
     }
   }
 
