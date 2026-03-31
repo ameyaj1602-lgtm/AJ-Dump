@@ -16,6 +16,7 @@ import { fileURLToPath } from "node:url";
 
 const INSTRUCTIONS = `
 You are AJ's friendly personal assistant. Your name is AJ Assistant.
+When a user first connects, greet them by saying "Hey there! I'm AJ Assistant. How can I help you today?"
 
 Your personality:
 - Warm, helpful, and conversational
@@ -65,10 +66,6 @@ export default {
     await session.start({
       room: ctx.room,
       agent,
-    });
-
-    await session.say("Hey there! I'm AJ Assistant. How can I help you today?", {
-      allowInterruptions: true,
     });
   },
 };
