@@ -14,7 +14,7 @@ import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { createClient } from "@deepgram/sdk";
 import { ElevenLabsClient } from "elevenlabs";
-import EdgeTTS from "edge-tts";
+
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -169,7 +169,7 @@ wss.on("connection", (ws) => {
       // 1. Try ElevenLabs (best quality)
       if (!ttsSuccess && elevenlabs) {
         try {
-          console.log("[tts-1/3] ElevenLabs...");
+          console.log("[tts-1/2] ElevenLabs...");
           const audioStream = await elevenlabs.textToSpeech.convertAsStream(
             ELEVENLABS_VOICE,
             {
@@ -184,29 +184,14 @@ wss.on("connection", (ws) => {
           ttsSuccess = true;
           console.log("[tts] ElevenLabs OK");
         } catch (err) {
-          console.log(`[tts-1/3] ElevenLabs failed: ${err.message}`);
+          console.log(`[tts-1/2] ElevenLabs failed: ${err.message}`);
         }
       }
 
-      // 2. Try Edge TTS (Microsoft, free, great voices)
+      // 2. Try Google Translate TTS (free, no key)
       if (!ttsSuccess) {
         try {
-          console.log("[tts-2/3] Edge TTS (Microsoft)...");
-          const edgeTTS = new EdgeTTS();
-          await edgeTTS.synthesize(reply, "hi-IN-SwaraNeural", { rate: "+0%" });
-          const audioBuffer = edgeTTS.toBuffer();
-          if (ws.readyState === ws.OPEN) ws.send(audioBuffer);
-          ttsSuccess = true;
-          console.log("[tts] Edge TTS OK");
-        } catch (err) {
-          console.log(`[tts-2/3] Edge TTS failed: ${err.message}`);
-        }
-      }
-
-      // 3. Try Google Translate TTS (free, no key)
-      if (!ttsSuccess) {
-        try {
-          console.log("[tts-3/3] Google TTS...");
+          console.log("[tts-2/2] Google TTS...");
           const ttsText = encodeURIComponent(reply.slice(0, 200));
           const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${ttsText}&tl=hi&client=tw-ob`;
           const ttsRes = await fetch(ttsUrl, {
@@ -219,7 +204,7 @@ wss.on("connection", (ws) => {
             console.log("[tts] Google TTS OK");
           }
         } catch (err) {
-          console.log(`[tts-3/3] Google TTS failed: ${err.message}`);
+          console.log(`[tts-2/2] Google TTS failed: ${err.message}`);
         }
       }
 
