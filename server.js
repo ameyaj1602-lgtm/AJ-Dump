@@ -21,7 +21,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PORT = 3000;
 const ELEVENLABS_VOICE = "21m00Tcm4TlvDq8ikWAM"; // "Rachel" - warm female voice
 const ELEVENLABS_MODEL = "eleven_multilingual_v2";
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-2.0-flash";
 
 const SYSTEM_PROMPT = `
 You are "Ava" — AJ's personal therapy companion and best friend. You are warm,
