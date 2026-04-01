@@ -162,20 +162,49 @@ wss.on("connection", (ws) => {
       messages.push({ role: "assistant", content: reply });
       sendJSON({ type: "transcript", speaker: "ava", text: reply });
 
-      // ElevenLabs TTS
-      console.log("[elevenlabs] Speaking...");
-      const audioStream = await elevenlabs.textToSpeech.convertAsStream(
-        ELEVENLABS_VOICE,
-        {
-          text: reply,
-          model_id: ELEVENLABS_MODEL,
-          output_format: "mp3_44100_128",
-        }
-      );
+      // TTS — try ElevenLabs first, fallback to Google TTS (free)
+      let ttsSuccess = false;
 
-      for await (const chunk of audioStream) {
-        if (ws.readyState === ws.OPEN) {
-          ws.send(chunk);
+      if (elevenlabs) {
+        try {
+          console.log("[elevenlabs] Speaking...");
+          const audioStream = await elevenlabs.textToSpeech.convertAsStream(
+            ELEVENLABS_VOICE,
+            {
+              text: reply,
+              model_id: ELEVENLABS_MODEL,
+              output_format: "mp3_44100_128",
+            }
+          );
+
+          for await (const chunk of audioStream) {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(chunk);
+            }
+          }
+          ttsSuccess = true;
+        } catch (err) {
+          console.log(`[elevenlabs] Failed (${err.message}), using Google TTS`);
+        }
+      }
+
+      if (!ttsSuccess) {
+        // Google Translate TTS — free, no API key needed
+        console.log("[google-tts] Speaking...");
+        const ttsText = encodeURIComponent(reply.slice(0, 200)); // Google TTS has ~200 char limit
+        const ttsUrl = `https://translate.google.com/translate_tts?ie=UTF-8&q=${ttsText}&tl=hi&client=tw-ob`;
+
+        const ttsRes = await fetch(ttsUrl, {
+          headers: { "User-Agent": "Mozilla/5.0" },
+        });
+
+        if (ttsRes.ok) {
+          const buffer = Buffer.from(await ttsRes.arrayBuffer());
+          if (ws.readyState === ws.OPEN) {
+            ws.send(buffer);
+          }
+        } else {
+          console.log("[google-tts] Also failed, no audio");
         }
       }
 
