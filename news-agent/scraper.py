@@ -1,12 +1,13 @@
 """
-Real-time scraper — pulls live data from news websites, Reddit, and Twitter/X
-without needing any API keys. Uses plain HTTP requests + HTML parsing.
+Real-time scraper — pulls live data from news sites, Reddit, Twitter/X, HN.
+Features: per-scraper timeouts, HTML cleanup, expanded sources.
 """
 
 import asyncio
 import logging
 import re
 from datetime import datetime
+from html import unescape
 
 import httpx
 
@@ -21,140 +22,57 @@ _HEADERS = {
 }
 
 
-# ── Reddit (no API key needed — uses public JSON endpoints) ──────────────────
+# ── Reddit ────────────────────────────────────────────────────────────────────
 
 async def scrape_reddit(client: httpx.AsyncClient) -> list[RawArticle]:
-    """Scrape top posts from news-related subreddits via Reddit's public JSON API."""
     subreddits = [
-        "worldnews",
-        "technology",
-        "business",
-        "news",
-        "artificial",
-        "startups",
+        "worldnews", "technology", "business", "news",
+        "artificial", "startups", "science", "economics",
+        "geopolitics", "futurology", "india", "singularity",
     ]
     articles: list[RawArticle] = []
-
     for sub in subreddits:
         try:
             resp = await client.get(
                 f"https://www.reddit.com/r/{sub}/hot.json?limit=10",
                 headers={**_HEADERS, "Accept": "application/json"},
-                timeout=15,
+                timeout=12,
             )
             resp.raise_for_status()
             data = resp.json()
-
+            count = 0
             for post in data.get("data", {}).get("children", []):
                 d = post.get("data", {})
                 title = d.get("title", "").strip()
-                if not title or d.get("stickied"):
+                if not title or d.get("stickied") or len(title) < 15:
                     continue
-                # Skip self-posts with no real content
                 url = d.get("url", "")
                 if "reddit.com/r/" in url and "/comments/" in url:
                     url = f"https://reddit.com{d.get('permalink', '')}"
-
                 articles.append(
                     RawArticle(
-                        title=title,
-                        url=url,
-                        source=f"r/{sub}",
-                        published=datetime.utcfromtimestamp(
-                            d.get("created_utc", 0)
-                        ).isoformat()
-                        if d.get("created_utc")
-                        else "",
+                        title=title, url=url, source=f"r/{sub}",
+                        published=datetime.utcfromtimestamp(d.get("created_utc", 0)).isoformat() if d.get("created_utc") else "",
                         description=(d.get("selftext") or "")[:500],
                     )
                 )
-            logger.info("Reddit  r/%-20s → %d posts", sub, len(articles))
+                count += 1
+            logger.info("Reddit  r/%-16s → %d posts", sub, count)
         except Exception as exc:
-            logger.warning("Reddit r/%s scrape failed: %s", sub, exc)
-
+            logger.debug("Reddit r/%s failed: %s", sub, str(exc)[:60])
     return articles
 
 
-# ── Twitter/X Trending (via Nitter mirrors — no API key needed) ──────────────
-
-async def scrape_twitter_trends(client: httpx.AsyncClient) -> list[RawArticle]:
-    """Scrape trending topics from Twitter/X via public sources."""
-    articles: list[RawArticle] = []
-
-    # Method 1: Use Twstalker or similar public viewer
-    # Method 2: Scrape trending from Twitter's explore page data
-    # We use a reliable public trends endpoint
-    try:
-        # Trends24 provides Twitter trending data publicly
-        resp = await client.get(
-            "https://trends24.in/united-states/",
-            headers=_HEADERS,
-            timeout=15,
-        )
-        if resp.status_code == 200:
-            text = resp.text
-            # Extract trending topics from the HTML
-            # Look for trend links in the page
-            trend_pattern = re.compile(
-                r'<a[^>]*href="(/united-states/\#[^"]*)"[^>]*>([^<]+)</a>',
-                re.IGNORECASE,
-            )
-            # Also try the more common trend card pattern
-            card_pattern = re.compile(
-                r'<li[^>]*>\s*<a[^>]*>([^<]+)</a>',
-                re.IGNORECASE,
-            )
-            trends = set()
-            for match in trend_pattern.finditer(text):
-                trend = match.group(2).strip()
-                if trend and len(trend) > 2:
-                    trends.add(trend)
-            for match in card_pattern.finditer(text):
-                trend = match.group(1).strip()
-                if trend and trend.startswith("#") and len(trend) > 2:
-                    trends.add(trend)
-
-            for trend in list(trends)[:20]:
-                search_query = trend.replace("#", "").replace(" ", "+")
-                articles.append(
-                    RawArticle(
-                        title=f"Trending on X: {trend}",
-                        url=f"https://x.com/search?q={search_query}",
-                        source="Twitter/X Trends",
-                        description=f"Currently trending on Twitter/X: {trend}",
-                    )
-                )
-            logger.info("Twitter trends → %d topics", len(articles))
-    except Exception as exc:
-        logger.warning("Twitter trends scrape failed: %s", exc)
-
-    return articles
-
-
-# ── Hacker News API (free, no key needed) ────────────────────────────────────
+# ── Hacker News API ───────────────────────────────────────────────────────────
 
 async def scrape_hackernews(client: httpx.AsyncClient) -> list[RawArticle]:
-    """Fetch top stories from Hacker News official API (free, no key)."""
     articles: list[RawArticle] = []
     try:
-        resp = await client.get(
-            "https://hacker-news.firebaseio.com/v0/topstories.json",
-            timeout=10,
-        )
+        resp = await client.get("https://hacker-news.firebaseio.com/v0/topstories.json", timeout=10)
         resp.raise_for_status()
-        story_ids = resp.json()[:25]  # top 25
-
-        # Fetch stories in parallel
-        tasks = []
-        for sid in story_ids:
-            tasks.append(
-                client.get(
-                    f"https://hacker-news.firebaseio.com/v0/item/{sid}.json",
-                    timeout=10,
-                )
-            )
+        story_ids = resp.json()[:25]
+        tasks = [client.get(f"https://hacker-news.firebaseio.com/v0/item/{sid}.json", timeout=10) for sid in story_ids]
         responses = await asyncio.gather(*tasks, return_exceptions=True)
-
         for r in responses:
             if isinstance(r, Exception):
                 continue
@@ -168,150 +86,131 @@ async def scrape_hackernews(client: httpx.AsyncClient) -> list[RawArticle]:
                         title=title,
                         url=item.get("url", f"https://news.ycombinator.com/item?id={item.get('id', '')}"),
                         source="Hacker News",
-                        published=datetime.utcfromtimestamp(
-                            item.get("time", 0)
-                        ).isoformat()
-                        if item.get("time")
-                        else "",
+                        published=datetime.utcfromtimestamp(item.get("time", 0)).isoformat() if item.get("time") else "",
                         description=f"Score: {item.get('score', 0)} | Comments: {item.get('descendants', 0)}",
                     )
                 )
             except Exception:
                 continue
-
         logger.info("Hacker News API → %d stories", len(articles))
     except Exception as exc:
-        logger.warning("Hacker News API scrape failed: %s", exc)
-
+        logger.debug("HN API failed: %s", str(exc)[:60])
     return articles
 
 
-# ── Google News scraping (HTML fallback when RSS is blocked) ─────────────────
+# ── Google News scraping ──────────────────────────────────────────────────────
 
 async def scrape_google_news(client: httpx.AsyncClient) -> list[RawArticle]:
-    """Scrape Google News search results for breaking news."""
     articles: list[RawArticle] = []
-    MAX_PER_QUERY = 20  # Cap to avoid flooding with low-quality results
-    queries = ["breaking news today"]
-
-    for query in queries:
-        try:
-            resp = await client.get(
-                "https://news.google.com/search",
-                params={"q": query, "hl": "en-US", "gl": "US", "ceid": "US:en"},
-                headers=_HEADERS,
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                continue
-
-            # Extract article titles from Google News HTML
-            # Google News uses <a class="...">title</a> patterns
-            title_pattern = re.compile(
-                r'<a[^>]*class="[^"]*JtKRv[^"]*"[^>]*>([^<]+)</a>',
-                re.IGNORECASE,
-            )
-            count = 0
-            for match in title_pattern.finditer(resp.text):
-                if count >= MAX_PER_QUERY:
-                    break
-                title = match.group(1).strip()
-                if title and len(title) > 15:
-                    articles.append(
-                        RawArticle(
-                            title=title,
-                            url="https://news.google.com",
-                            source="Google News",
-                            description="",
-                        )
-                    )
-                    count += 1
-
-            logger.info("Google News scrape '%s' → %d items", query, count)
-        except Exception as exc:
-            logger.warning("Google News scrape failed: %s", exc)
-
+    MAX_PER_QUERY = 20
+    try:
+        resp = await client.get(
+            "https://news.google.com/search",
+            params={"q": "breaking news today", "hl": "en-US", "gl": "US", "ceid": "US:en"},
+            headers=_HEADERS, timeout=15,
+        )
+        if resp.status_code != 200:
+            return []
+        title_pattern = re.compile(r'<a[^>]*class="[^"]*JtKRv[^"]*"[^>]*>([^<]+)</a>', re.I)
+        count = 0
+        for match in title_pattern.finditer(resp.text):
+            if count >= MAX_PER_QUERY:
+                break
+            title = unescape(match.group(1).strip())
+            if title and len(title) > 15:
+                articles.append(RawArticle(title=title, url="https://news.google.com", source="Google News"))
+                count += 1
+        logger.info("Google News scrape → %d items", count)
+    except Exception as exc:
+        logger.debug("Google News scrape failed: %s", str(exc)[:60])
     return articles
 
 
-# ── BBC / Reuters / Al Jazeera headline scraping ─────────────────────────────
+# ── BBC / NPR / News site scraping ───────────────────────────────────────────
 
 async def scrape_news_sites(client: httpx.AsyncClient) -> list[RawArticle]:
-    """Scrape headlines from major news websites."""
     articles: list[RawArticle] = []
-
     sites = [
-        {
-            "url": "https://www.bbc.com/news",
-            "source": "BBC News",
-            # BBC uses data-testid attributes for headlines
-            "patterns": [
-                re.compile(r'<h2[^>]*data-testid="card-headline"[^>]*>([^<]+)</h2>', re.I),
-                re.compile(r'<h3[^>]*>([^<]{20,120})</h3>', re.I),
-            ],
-        },
-        {
-            "url": "https://www.aljazeera.com/",
-            "source": "Al Jazeera",
-            "patterns": [
-                re.compile(r'<h3[^>]*class="[^"]*article-card[^"]*"[^>]*>\s*<a[^>]*>\s*<span>([^<]+)</span>', re.I),
-                re.compile(r'<h3[^>]*>[^<]*<a[^>]*>([^<]{20,120})</a>', re.I),
-            ],
-        },
+        {"url": "https://www.bbc.com/news", "source": "BBC News",
+         "patterns": [re.compile(r'<h2[^>]*data-testid="card-headline"[^>]*>([^<]+)</h2>', re.I),
+                      re.compile(r'<h3[^>]*>([^<]{20,120})</h3>', re.I)]},
+        {"url": "https://text.npr.org/", "source": "NPR",
+         "patterns": [re.compile(r'<a[^>]*class="topic-title"[^>]*>\s*<h2[^>]*>([^<]+)</h2>', re.I),
+                      re.compile(r'<a[^>]*href="/\d+">([^<]{20,120})</a>', re.I)]},
     ]
-
     for site in sites:
         try:
-            resp = await client.get(
-                site["url"], headers=_HEADERS, timeout=15, follow_redirects=True
-            )
+            resp = await client.get(site["url"], headers=_HEADERS, timeout=15, follow_redirects=True)
             if resp.status_code != 200:
                 continue
-
             found = set()
             for pattern in site["patterns"]:
                 for match in pattern.finditer(resp.text):
-                    title = match.group(1).strip()
-                    # Clean up HTML entities
-                    title = title.replace("&amp;", "&").replace("&#x27;", "'").replace("&quot;", '"')
+                    title = unescape(match.group(1).strip())
                     if title and len(title) > 15 and title not in found:
                         found.add(title)
-                        articles.append(
-                            RawArticle(
-                                title=title,
-                                url=site["url"],
-                                source=site["source"],
-                                description="",
-                            )
-                        )
-
+                        articles.append(RawArticle(title=title, url=site["url"], source=site["source"]))
             logger.info("%-15s → %d headlines", site["source"], len(found))
         except Exception as exc:
-            logger.warning("%s scrape failed: %s", site["source"], exc)
+            logger.debug("%s scrape failed: %s", site["source"], str(exc)[:60])
+    return articles
 
+
+# ── Twitter/X Trends ──────────────────────────────────────────────────────────
+
+async def scrape_twitter_trends(client: httpx.AsyncClient) -> list[RawArticle]:
+    articles: list[RawArticle] = []
+    try:
+        resp = await client.get("https://trends24.in/united-states/", headers=_HEADERS, timeout=15)
+        if resp.status_code != 200:
+            return []
+        trends = set()
+        for pattern in [re.compile(r'<a[^>]*>([#@]\w[\w\s]{2,30})</a>', re.I)]:
+            for match in pattern.finditer(resp.text):
+                trend = match.group(1).strip()
+                if trend and trend.startswith("#") and len(trend) > 2:
+                    trends.add(trend)
+        for trend in list(trends)[:15]:
+            search_query = trend.replace("#", "").replace(" ", "+")
+            articles.append(RawArticle(
+                title=f"Trending on X: {trend}",
+                url=f"https://x.com/search?q={search_query}",
+                source="Twitter/X Trends",
+                description=f"Currently trending on Twitter/X: {trend}",
+            ))
+        if trends:
+            logger.info("Twitter trends → %d topics", len(trends))
+    except Exception as exc:
+        logger.debug("Twitter trends failed: %s", str(exc)[:60])
     return articles
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def scrape_all() -> list[RawArticle]:
-    """Run all scrapers concurrently and return combined results."""
+    """Run all scrapers concurrently with per-scraper timeouts."""
     async with httpx.AsyncClient(headers=_HEADERS, follow_redirects=True) as client:
-        results = await asyncio.gather(
-            scrape_reddit(client),
-            scrape_twitter_trends(client),
-            scrape_hackernews(client),
-            scrape_google_news(client),
-            scrape_news_sites(client),
-            return_exceptions=True,
-        )
+        scrapers = [
+            ("Reddit", scrape_reddit(client)),
+            ("HN", scrape_hackernews(client)),
+            ("Google News", scrape_google_news(client)),
+            ("News Sites", scrape_news_sites(client)),
+            ("Twitter", scrape_twitter_trends(client)),
+        ]
 
-    articles: list[RawArticle] = []
-    for result in results:
-        if isinstance(result, list):
-            articles.extend(result)
-        elif isinstance(result, Exception):
-            logger.warning("Scraper error: %s", result)
+        articles: list[RawArticle] = []
+        tasks = []
+        names = []
+        for name, coro in scrapers:
+            tasks.append(asyncio.wait_for(coro, timeout=45))
+            names.append(name)
+
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for name, result in zip(names, results):
+            if isinstance(result, list):
+                articles.extend(result)
+            elif isinstance(result, Exception):
+                logger.debug("Scraper %s timed out or failed: %s", name, str(result)[:60])
 
     logger.info("Scrapers total → %d raw articles", len(articles))
     return articles

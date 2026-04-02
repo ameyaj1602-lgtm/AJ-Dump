@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """
-Real-Time News Intelligence Agent
-──────────────────────────────────
+Real-Time News Intelligence Agent — Production Grade
+─────────────────────────────────────────────────────
 Fetches → Deduplicates → Analyses → Ranks → Alerts
 
+Features:
+  - Auto-recovery on crash with exponential backoff
+  - DB cleanup for long-running operation
+  - Never dies — outer restart loop catches everything
+
 Usage:
-    python main.py              # Run the agent loop
+    python main.py              # Run forever
     python main.py --once       # Run one cycle and exit
     python main.py --dashboard  # Show recent alerts from DB
 """
@@ -16,6 +21,7 @@ import logging
 import signal
 import sys
 import time
+import traceback
 
 import config
 import database
@@ -32,9 +38,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("agent")
 
-# Quiet down noisy libraries
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("httpcore").setLevel(logging.WARNING)
+# Quiet noisy libraries
+for lib in ["httpx", "httpcore", "feedparser", "charset_normalizer", "hpack"]:
+    logging.getLogger(lib).setLevel(logging.WARNING)
 
 
 # ── Agent Loop ────────────────────────────────────────────────────────────────
@@ -62,64 +68,69 @@ async def run_cycle() -> int:
     # 2. Analyse & filter
     analysed = await analyzer.analyse(raw_articles)
 
-    # 3. Store in DB
+    # 3. Store in DB (only articles above threshold)
+    stored = 0
     for a in analysed:
-        database.insert_article(
-            article_hash=a.hash,
-            title=a.title,
-            url=a.url,
-            source=a.source,
-            summary=a.summary,
-            tags=",".join(a.tags),
-            priority=a.priority,
-            cluster_id=a.cluster_id,
-            published=a.published,
+        ok = database.insert_article(
+            article_hash=a.hash, title=a.title, url=a.url, source=a.source,
+            summary=a.summary, tags=",".join(a.tags), priority=a.priority,
+            cluster_id=a.cluster_id, published=a.published,
         )
+        if ok:
+            stored += 1
 
-    # 4. Print CLI dashboard
+    # 4. Dashboard
     notifier.print_dashboard(analysed)
 
-    # 5. Send alerts
+    # 5. Telegram alerts
     sent = await notifier.send_alerts(analysed)
 
     elapsed = time.monotonic() - start
-    logger.info(
-        "═══ Cycle done: %d new, %d alerted, %.1fs ═══",
-        len(analysed),
-        sent,
-        elapsed,
-    )
+    logger.info("═══ Done: %d new, %d stored, %d alerted, %.1fs ═══", len(analysed), stored, sent, elapsed)
     return sent
 
 
 async def run_loop():
-    """Main agent loop — runs cycles on the configured interval."""
+    """Main agent loop — runs forever with auto-recovery."""
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
 
-    logger.info("🚀 News Intelligence Agent started (poll every %ds)", config.POLL_INTERVAL_SECONDS)
-    logger.info("   RSS feeds: %d", len(config.RSS_FEEDS))
-    logger.info("   NewsAPI: %s", "enabled" if config.NEWS_API_KEY else "disabled")
-    logger.info("   Telegram: %s", "enabled" if config.TELEGRAM_BOT_TOKEN else "disabled")
-    if config.GEMINI_API_KEY:
-        logger.info("   LLM: Gemini %s (FREE)", config.GEMINI_MODEL)
-    elif config.OPENAI_API_KEY:
-        logger.info("   LLM: OpenAI %s (paid)", config.OPENAI_MODEL)
-    else:
-        logger.info("   LLM: heuristic mode (no API key)")
-    logger.info("   Min priority: %d", config.MIN_PRIORITY_SCORE)
+    logger.info("🚀 News Intelligence Agent started")
+    logger.info("   RSS feeds: %d | Poll: %ds | Min score: %d",
+                len(config.RSS_FEEDS), config.POLL_INTERVAL_SECONDS, config.MIN_PRIORITY_SCORE)
+    logger.info("   Gemini: %s | Telegram: %s",
+                "on" if config.GEMINI_API_KEY else "off",
+                "on" if config.TELEGRAM_BOT_TOKEN else "off")
+
+    consecutive_failures = 0
+    cycle_count = 0
 
     while _running:
         try:
             await run_cycle()
+            consecutive_failures = 0
+            cycle_count += 1
+
+            # Periodic DB cleanup every 10 cycles
+            if cycle_count % 10 == 0:
+                deleted = database.cleanup_old(config.MAX_ARTICLE_AGE_HOURS)
+                if deleted:
+                    logger.info("DB cleanup: removed %d old articles", deleted)
+
         except Exception:
-            logger.exception("Cycle failed — will retry next interval")
+            consecutive_failures += 1
+            backoff = min(2 ** consecutive_failures * 5, 300)
+            logger.exception("Cycle failed (attempt %d) — retrying in %ds", consecutive_failures, backoff)
+            for _ in range(backoff):
+                if not _running:
+                    break
+                await asyncio.sleep(1)
+            continue
 
         if not _running:
             break
 
         logger.info("Sleeping %ds until next cycle…", config.POLL_INTERVAL_SECONDS)
-        # Sleep in small increments so we can respond to signals
         for _ in range(config.POLL_INTERVAL_SECONDS):
             if not _running:
                 break
@@ -129,26 +140,20 @@ async def run_loop():
     logger.info("Agent stopped.")
 
 
-# ── CLI: Show Dashboard from DB ──────────────────────────────────────────────
+# ── CLI: Dashboard ────────────────────────────────────────────────────────────
 
 def show_dashboard():
-    """Display recent articles from the database."""
-    rows = database.get_recent(20)
+    rows = database.get_recent(50, min_priority=config.MIN_PRIORITY_SCORE)
     if not rows:
         print("No articles in database yet. Run the agent first.")
         return
 
     articles = [
         analyzer.AnalysedArticle(
-            title=r["title"],
-            url=r["url"] or "",
-            source=r["source"] or "",
-            published=r["published"] or "",
-            hash=r["hash"],
-            summary=r["summary"] or "",
-            tags=(r["tags"] or "").split(","),
-            priority=r["priority"] or 0,
-            cluster_id=r["cluster_id"] or "",
+            title=r["title"], url=r["url"] or "", source=r["source"] or "",
+            published=r["published"] or "", hash=r["hash"],
+            summary=r["summary"] or "", tags=(r["tags"] or "").split(","),
+            priority=r["priority"] or 0, cluster_id=r["cluster_id"] or "",
         )
         for r in rows
     ]
@@ -168,7 +173,16 @@ def main():
     elif args.once:
         asyncio.run(run_cycle())
     else:
-        asyncio.run(run_loop())
+        # Outer restart loop — truly never dies
+        while True:
+            try:
+                asyncio.run(run_loop())
+                break  # clean exit via signal
+            except KeyboardInterrupt:
+                break
+            except Exception:
+                logger.critical("Fatal crash — restarting in 60s\n%s", traceback.format_exc())
+                time.sleep(60)
 
 
 if __name__ == "__main__":
