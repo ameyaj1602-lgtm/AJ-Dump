@@ -152,41 +152,152 @@ async def _llm_analyse_batch(articles: list[RawArticle]) -> list[dict]:
 
 # ── Heuristic Fallback ───────────────────────────────────────────────────────
 
-def _heuristic_score(article: RawArticle) -> dict:
-    """Fast keyword-based scoring when LLM is unavailable."""
-    text = f"{article.title} {article.description}".lower()
-    score = 30  # baseline
+def _make_summary(title: str, description: str) -> str:
+    """Generate a concise summary from title + description without LLM."""
+    title = title.strip()
+    desc = description.strip()
 
-    # Urgency signals
-    urgent_words = ["breaking", "urgent", "just in", "alert", "crash", "war", "killed"]
-    for w in urgent_words:
+    # If description adds real info beyond the title, combine them
+    if desc and len(desc) > 30:
+        # Remove common prefixes/suffixes from descriptions
+        for noise in ["Continue reading...", "Read more", "Click here", "...", "---"]:
+            desc = desc.replace(noise, "").strip()
+        # If desc is just the title repeated, skip it
+        if desc.lower()[:40] != title.lower()[:40] and len(desc) > 20:
+            # Take first sentence of description
+            first_sentence = desc.split(". ")[0].split(".\n")[0]
+            if len(first_sentence) > 20 and len(first_sentence) < 200:
+                return first_sentence[:120]
+
+    # Clean up title as summary
+    summary = title
+    # Remove source suffixes like "- Reuters", "| BBC"
+    for sep in [" - ", " | ", " — ", " · "]:
+        if sep in summary:
+            parts = summary.split(sep)
+            # Keep the longer part (usually the actual headline)
+            summary = max(parts[:-1], key=len) if len(parts) > 1 else parts[0]
+    return summary[:120]
+
+
+# Words that indicate junk / non-news content
+_JUNK_PATTERNS = [
+    "livestream", "live stream", "watch here", "watch live",
+    "weather forecast", "weather today", "weather |",
+    "horoscope", "crossword", "sudoku", "quiz:",
+    "recap:", "roundup:", "newsletter", "subscribe",
+    "nfl draft", "nfl free agency", "fantasy football",
+    "transfer news", "transfer rumours", "transfer centre",
+    "odds and predictions", "betting", "sportsbook",
+]
+
+
+def _heuristic_score(article: RawArticle) -> dict:
+    """Smart keyword-based scoring — works great without any LLM."""
+    title = article.title
+    text = f"{title} {article.description}".lower()
+    score = 0
+
+    # ── Junk filter: penalise non-news content ──
+    for junk in _JUNK_PATTERNS:
+        if junk in text:
+            score -= 50
+            break
+
+    # ── Source quality bonus ──
+    high_quality = ["techcrunch", "reuters", "bbc", "ars technica",
+                    "hacker news", "economic times", "al jazeera"]
+    source_lower = article.source.lower()
+    if any(s in source_lower for s in high_quality):
+        score += 15
+    elif "google news" in source_lower:
+        score += 5  # lower because scraping pulls junk
+    elif source_lower.startswith("r/"):
+        score += 10
+
+    # ── Urgency signals (strong) ──
+    urgency_high = ["breaking:", "just in:", "urgent:", "developing:"]
+    for w in urgency_high:
+        if w in text:
+            score += 30
+            break
+
+    urgency_medium = ["breaking news", "breaking -", "just announced",
+                      "confirms", "revealed", "emergency", "earthquake",
+                      "tsunami", "explosion", "assassination", "coup"]
+    for w in urgency_medium:
+        if w in text:
+            score += 20
+            break
+
+    # ── Market impact signals ──
+    market_high = ["ipo", "acquisition", "acquires", "merger", "buys for",
+                   "raises $", "billion", "trillion", "market crash",
+                   "stock plunge", "stock surge"]
+    for w in market_high:
         if w in text:
             score += 25
             break
 
-    # Keyword boost
-    for kw in config.PRIORITY_KEYWORDS:
-        if kw.lower() in text:
-            score += 10
+    market_medium = ["funding", "valuation", "layoffs", "lays off",
+                     "cuts jobs", "files for", "goes public", "stock market",
+                     "oil price", "interest rate", "tariff"]
+    for w in market_medium:
+        if w in text:
+            score += 15
             break
 
-    # Market words
-    market_words = ["ipo", "acquisition", "billion", "funding", "valuation", "merger"]
-    for w in market_words:
+    # ── User keyword boost ──
+    keyword_hits = 0
+    for kw in config.PRIORITY_KEYWORDS:
+        if kw.lower() in text:
+            keyword_hits += 1
+    score += min(keyword_hits * 8, 24)  # up to 24 points for 3+ keywords
+
+    # ── Virality signals ──
+    viral_words = ["shocking", "massive", "historic", "unprecedented",
+                   "first ever", "record-breaking", "millions"]
+    for w in viral_words:
         if w in text:
             score += 10
             break
 
-    score = min(score, 100)
+    # ── Tech/AI signals (since user cares about these) ──
+    tech_signals = ["openai", "chatgpt", "claude", "gemini", "gpt-",
+                    "llm", "artificial intelligence", "neural",
+                    "robot", "autonomous", "quantum"]
+    tech_hits = sum(1 for w in tech_signals if w in text)
+    if tech_hits:
+        score += 10 + (tech_hits * 3)
 
-    # Simple tag extraction
+    # ── Normalise to 0–100 ──
+    score = max(0, min(100, score + 25))  # +25 baseline
+
+    # ── Tag extraction (richer) ──
     tags = []
     tag_map = {
-        "ai": ["ai", "artificial intelligence", "machine learning", "gpt", "llm"],
-        "finance": ["stock", "market", "ipo", "funding", "billion", "valuation"],
-        "startups": ["startup", "founder", "seed", "series a", "y combinator"],
-        "geopolitics": ["war", "sanction", "treaty", "nato", "china", "russia"],
-        "tech": ["google", "apple", "microsoft", "meta", "amazon", "openai"],
+        "ai": ["ai ", " ai,", "artificial intelligence", "machine learning",
+               "gpt", "llm", "chatgpt", "openai", "claude", "gemini",
+               "deep learning", "neural net", "robot"],
+        "finance": ["stock", "market", "ipo", "funding", "billion",
+                     "valuation", "investor", "revenue", "profit",
+                     "oil price", "interest rate", "inflation", "economy"],
+        "startups": ["startup", "founder", "seed round", "series a",
+                     "series b", "y combinator", "yc ", "venture",
+                     "accelerator", "incubator"],
+        "geopolitics": ["war ", "sanction", "treaty", "nato", "iran",
+                        "china", "russia", "ukraine", "missile",
+                        "military", "troops", "diplomat"],
+        "tech": ["google", "apple", "microsoft", "meta ", "amazon",
+                 "nvidia", "tesla", "spacex", "samsung", "intel"],
+        "security": ["hack", "breach", "cyber", "vulnerability",
+                     "malware", "ransomware", "data leak"],
+        "science": ["nasa", "artemis", "space", "quantum", "research",
+                    "discovery", "study finds", "scientists"],
+        "india": ["india", "modi", "rupee", "sensex", "nifty",
+                  "mumbai", "delhi", "bengaluru", "kerala"],
+        "crypto": ["bitcoin", "ethereum", "crypto", "blockchain",
+                   "defi", "nft", "web3"],
     }
     for tag, keywords in tag_map.items():
         if any(k in text for k in keywords):
@@ -194,11 +305,17 @@ def _heuristic_score(article: RawArticle) -> dict:
     if not tags:
         tags = ["general"]
 
+    # ── Cluster by primary tag ──
+    cluster = tags[0]
+
+    # ── Generate summary ──
+    summary = _make_summary(title, article.description)
+
     return {
-        "summary": article.title[:120],
+        "summary": summary,
         "tags": tags,
         "priority": score,
-        "cluster": tags[0],
+        "cluster": cluster,
     }
 
 

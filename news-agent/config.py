@@ -36,8 +36,8 @@ RSS_FEEDS = [
     "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en",
     # TechCrunch
     "https://techcrunch.com/feed/",
-    # Reuters – World
-    "https://www.reutersagency.com/feed/?best-topics=tech",
+    # AP News
+    "https://rsshub.app/apnews/topics/apf-topnews",
     # Economic Times – India
     "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
     # Hacker News (front page)
@@ -65,7 +65,7 @@ FILTER_KEYWORDS = [
 ]
 
 # Minimum priority score (0–100) to trigger an alert.
-MIN_PRIORITY_SCORE = int(os.getenv("MIN_PRIORITY_SCORE", "30"))
+MIN_PRIORITY_SCORE = int(os.getenv("MIN_PRIORITY_SCORE", "40"))
 
 # ── Database ──────────────────────────────────────────────────────────────────
 DB_PATH = os.getenv("DB_PATH", str(Path(__file__).parent / "news.db"))
