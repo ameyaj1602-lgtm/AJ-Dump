@@ -10,7 +10,12 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 
-# ── API Keys ──────────────────────────────────────────────────────────────────
+# ── LLM API Keys ─────────────────────────────────────────────────────────────
+# Google Gemini (FREE — default). Get key at https://aistudio.google.com/apikey
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+
+# OpenAI-compatible fallback (optional, only used if GEMINI_API_KEY is empty)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")

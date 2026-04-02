@@ -117,12 +117,17 @@ async def fetch_newsapi() -> list[RawArticle]:
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def fetch_all() -> list[RawArticle]:
-    """Fetch from all sources, deduplicate against DB, return only new articles."""
+    """Fetch from all sources (RSS + API + scrapers), deduplicate, return new."""
+    from scraper import scrape_all
+
     rss_task = fetch_rss()
     api_task = fetch_newsapi()
-    rss_articles, api_articles = await asyncio.gather(rss_task, api_task)
+    scrape_task = scrape_all()
+    rss_articles, api_articles, scraped_articles = await asyncio.gather(
+        rss_task, api_task, scrape_task
+    )
 
-    all_articles = rss_articles + api_articles
+    all_articles = rss_articles + api_articles + scraped_articles
 
     # Deduplicate: drop articles already in DB
     new_articles = [a for a in all_articles if not database.exists(a.hash)]

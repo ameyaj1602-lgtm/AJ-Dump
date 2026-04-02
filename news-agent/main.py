@@ -101,7 +101,12 @@ async def run_loop():
     logger.info("   RSS feeds: %d", len(config.RSS_FEEDS))
     logger.info("   NewsAPI: %s", "enabled" if config.NEWS_API_KEY else "disabled")
     logger.info("   Telegram: %s", "enabled" if config.TELEGRAM_BOT_TOKEN else "disabled")
-    logger.info("   LLM: %s", config.OPENAI_MODEL if config.OPENAI_API_KEY else "heuristic mode")
+    if config.GEMINI_API_KEY:
+        logger.info("   LLM: Gemini %s (FREE)", config.GEMINI_MODEL)
+    elif config.OPENAI_API_KEY:
+        logger.info("   LLM: OpenAI %s (paid)", config.OPENAI_MODEL)
+    else:
+        logger.info("   LLM: heuristic mode (no API key)")
     logger.info("   Min priority: %d", config.MIN_PRIORITY_SCORE)
 
     while _running:

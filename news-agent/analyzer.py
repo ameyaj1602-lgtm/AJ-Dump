@@ -1,6 +1,6 @@
 """
 Intelligence layer — uses an LLM to summarise, score, tag, and cluster articles.
-Falls back to heuristic scoring when no API key is set.
+Priority: Google Gemini (free) → OpenAI (paid) → heuristic fallback.
 """
 
 import json
@@ -29,7 +29,7 @@ class AnalysedArticle:
     cluster_id: str
 
 
-# ── LLM Analysis ─────────────────────────────────────────────────────────────
+# ── Shared Prompt ─────────────────────────────────────────────────────────────
 
 _SYSTEM_PROMPT = """You are a breaking-news analyst. For each article, return JSON (no markdown):
 {
@@ -47,21 +47,67 @@ Priority scoring guide:
 """
 
 
-async def _llm_analyse_batch(articles: list[RawArticle]) -> list[dict]:
-    """Send a batch of articles to the LLM for analysis."""
-    if not config.OPENAI_API_KEY:
-        return []
-
+def _build_user_message(articles: list[RawArticle]) -> str:
     numbered = "\n".join(
         f"{i+1}. [{a.source}] {a.title}"
         + (f" — {a.description[:150]}" if a.description else "")
         for i, a in enumerate(articles)
     )
-    user_msg = (
+    return (
         f"Analyse these {len(articles)} news articles. "
         f"Return a JSON array of {len(articles)} objects (one per article, same order).\n\n"
         f"{numbered}"
     )
+
+
+def _parse_llm_response(content: str) -> list[dict]:
+    """Parse LLM response, stripping markdown fences if present."""
+    content = re.sub(r"^```(?:json)?\s*", "", content.strip())
+    content = re.sub(r"\s*```$", "", content.strip())
+    results = json.loads(content)
+    if isinstance(results, dict):
+        results = [results]
+    return results
+
+
+# ── Google Gemini (FREE) ─────────────────────────────────────────────────────
+
+async def _gemini_analyse_batch(articles: list[RawArticle]) -> list[dict]:
+    """Send a batch of articles to Google Gemini for analysis."""
+    if not config.GEMINI_API_KEY:
+        return []
+
+    user_msg = _build_user_message(articles)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://generativelanguage.googleapis.com/v1beta/models/{config.GEMINI_MODEL}:generateContent",
+                params={"key": config.GEMINI_API_KEY},
+                json={
+                    "system_instruction": {"parts": [{"text": _SYSTEM_PROMPT}]},
+                    "contents": [{"parts": [{"text": user_msg}]}],
+                    "generationConfig": {"temperature": 0.2},
+                },
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["candidates"][0]["content"]["parts"][0]["text"]
+            return _parse_llm_response(content)
+    except Exception as exc:
+        logger.warning("Gemini analysis failed: %s", exc)
+        return []
+
+
+# ── OpenAI-compatible (fallback) ─────────────────────────────────────────────
+
+async def _openai_analyse_batch(articles: list[RawArticle]) -> list[dict]:
+    """Send a batch of articles to an OpenAI-compatible API for analysis."""
+    if not config.OPENAI_API_KEY:
+        return []
+
+    user_msg = _build_user_message(articles)
 
     try:
         async with httpx.AsyncClient() as client:
@@ -80,18 +126,27 @@ async def _llm_analyse_batch(articles: list[RawArticle]) -> list[dict]:
             )
             resp.raise_for_status()
             content = resp.json()["choices"][0]["message"]["content"]
-
-            # Strip markdown code fences if present
-            content = re.sub(r"^```(?:json)?\s*", "", content.strip())
-            content = re.sub(r"\s*```$", "", content.strip())
-
-            results = json.loads(content)
-            if isinstance(results, dict):
-                results = [results]
-            return results
+            return _parse_llm_response(content)
     except Exception as exc:
-        logger.warning("LLM analysis failed: %s", exc)
+        logger.warning("OpenAI analysis failed: %s", exc)
         return []
+
+
+# ── LLM dispatcher ───────────────────────────────────────────────────────────
+
+async def _llm_analyse_batch(articles: list[RawArticle]) -> list[dict]:
+    """Try Gemini first (free), then OpenAI, then return empty."""
+    if config.GEMINI_API_KEY:
+        results = await _gemini_analyse_batch(articles)
+        if results:
+            return results
+
+    if config.OPENAI_API_KEY:
+        results = await _openai_analyse_batch(articles)
+        if results:
+            return results
+
+    return []
 
 
 # ── Heuristic Fallback ───────────────────────────────────────────────────────
@@ -158,23 +213,32 @@ def _passes_filters(article: RawArticle, analysis: dict) -> bool:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
+def _get_llm_name() -> str:
+    if config.GEMINI_API_KEY:
+        return f"Gemini ({config.GEMINI_MODEL})"
+    if config.OPENAI_API_KEY:
+        return f"OpenAI ({config.OPENAI_MODEL})"
+    return "heuristic"
+
+
 async def analyse(articles: list[RawArticle]) -> list[AnalysedArticle]:
     """Analyse a batch of articles. Uses LLM if available, else heuristics."""
     if not articles:
         return []
 
+    has_llm = config.GEMINI_API_KEY or config.OPENAI_API_KEY
+
     # Process in batches of 15 for the LLM
     BATCH_SIZE = 15
     all_results: list[dict] = []
 
-    if config.OPENAI_API_KEY:
+    if has_llm:
         for i in range(0, len(articles), BATCH_SIZE):
             batch = articles[i : i + BATCH_SIZE]
             llm_results = await _llm_analyse_batch(batch)
             if len(llm_results) == len(batch):
                 all_results.extend(llm_results)
             else:
-                # Fallback for this batch
                 logger.warning(
                     "LLM returned %d results for %d articles, using heuristics",
                     len(llm_results),
@@ -182,7 +246,7 @@ async def analyse(articles: list[RawArticle]) -> list[AnalysedArticle]:
                 )
                 all_results.extend(_heuristic_score(a) for a in batch)
     else:
-        logger.info("No OPENAI_API_KEY set — using heuristic scoring")
+        logger.info("No LLM API key set — using heuristic scoring")
         all_results = [_heuristic_score(a) for a in articles]
 
     # Build AnalysedArticle objects and apply filters
