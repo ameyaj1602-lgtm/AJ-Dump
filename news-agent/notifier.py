@@ -112,11 +112,27 @@ def print_dashboard(articles: list[AnalysedArticle]) -> None:
 
 # ── Email Digest ──────────────────────────────────────────────────────────────
 
+_JUNK_URLS = ["https://news.google.com", "https://www.bbc.com/news",
+              "https://text.npr.org/", "https://www.aljazeera.com/"]
+
+
+def _has_real_link(url: str) -> bool:
+    """Check if the URL is a real article link, not a generic homepage."""
+    if not url:
+        return False
+    for junk in _JUNK_URLS:
+        if url.strip().rstrip("/") == junk.rstrip("/"):
+            return False
+    return url.startswith("http")
+
+
 def _build_email_html(articles: list[dict]) -> str:
-    """Build a beautiful HTML email from article dicts."""
+    """Build a premium HTML email digest."""
     today = datetime.now().strftime("%A, %B %d, %Y")
+    count = len(articles)
 
     rows = ""
+    rank = 0
     for a in articles:
         title = unescape(a.get("title", ""))
         summary = unescape(a.get("summary", ""))
@@ -124,49 +140,108 @@ def _build_email_html(articles: list[dict]) -> str:
         url = a.get("url", "")
         priority = a.get("priority", 0)
         tags = a.get("tags", "")
+        has_link = _has_real_link(url)
+        rank += 1
 
         if priority >= 70:
             color = "#e74c3c"
-            badge = "HIGH"
+            bg = "#fef2f2"
+            badge = "🔴 HIGH"
+            border_color = "#e74c3c"
         elif priority >= 50:
-            color = "#f39c12"
-            badge = "MED"
+            color = "#f59e0b"
+            bg = "#fffbeb"
+            badge = "🟡 MED"
+            border_color = "#f59e0b"
         else:
-            color = "#27ae60"
-            badge = "LOW"
+            color = "#10b981"
+            bg = "#f0fdf4"
+            badge = "🟢 LOW"
+            border_color = "#10b981"
 
         tag_badges = ""
-        for t in (tags.split(",") if tags else [])[:3]:
+        for t in (tags.split(",") if tags else [])[:4]:
             t = t.strip()
-            if t:
-                tag_badges += f'<span style="background:#eee;color:#555;padding:2px 6px;border-radius:3px;font-size:11px;margin-right:4px;">#{t}</span>'
+            if t and t != "general":
+                tag_badges += f'<span style="background:#f1f5f9;color:#475569;padding:3px 8px;border-radius:12px;font-size:11px;margin-right:4px;display:inline-block;">{t}</span>'
+
+        # Title — clickable if real link exists
+        if has_link:
+            title_html = f'<a href="{url}" style="color:#0f172a;text-decoration:none;font-size:16px;font-weight:700;line-height:1.4;display:block;">{title}</a>'
+        else:
+            title_html = f'<span style="color:#0f172a;font-size:16px;font-weight:700;line-height:1.4;display:block;">{title}</span>'
+
+        # Summary — only show if different from title
+        summary_html = ""
+        if summary and summary.lower()[:40] != title.lower()[:40]:
+            summary_html = f'<div style="color:#64748b;font-size:13px;margin-top:6px;line-height:1.5;">{summary[:180]}</div>'
+
+        # Read button
+        read_btn = ""
+        if has_link:
+            read_btn = f'<a href="{url}" style="display:inline-block;margin-top:8px;padding:6px 16px;background:{color};color:white;text-decoration:none;border-radius:6px;font-size:12px;font-weight:600;">Read →</a>'
 
         rows += f"""
         <tr>
-          <td style="padding:12px 16px;border-bottom:1px solid #eee;">
-            <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">
-              <span style="background:{color};color:white;padding:2px 8px;border-radius:3px;font-size:11px;font-weight:bold;">{badge} {priority}</span>
-              <span style="color:#888;font-size:12px;">{source}</span>
+          <td style="padding:0;">
+            <div style="margin:8px 16px;padding:16px;background:{bg};border-left:4px solid {border_color};border-radius:8px;">
+              <table style="width:100%;"><tr>
+                <td style="vertical-align:top;">
+                  <div style="margin-bottom:8px;">
+                    <span style="background:{color};color:white;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:0.5px;">{priority}</span>
+                    <span style="color:#94a3b8;font-size:12px;margin-left:8px;">{source}</span>
+                  </div>
+                  {title_html}
+                  {summary_html}
+                  <div style="margin-top:10px;">{tag_badges} {read_btn}</div>
+                </td>
+              </tr></table>
             </div>
-            <a href="{url}" style="color:#1a1a1a;text-decoration:none;font-size:15px;font-weight:600;line-height:1.3;">{title}</a>
-            <div style="color:#666;font-size:13px;margin-top:4px;line-height:1.4;">{summary}</div>
-            <div style="margin-top:6px;">{tag_badges}</div>
           </td>
         </tr>"""
 
     return f"""
     <html>
-    <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;margin:0;padding:0;background:#f5f5f5;">
-      <div style="max-width:640px;margin:0 auto;background:white;">
-        <div style="background:linear-gradient(135deg,#1a1a2e,#16213e);padding:24px 20px;text-align:center;">
-          <h1 style="color:white;margin:0;font-size:22px;">📡 News Intelligence Digest</h1>
-          <p style="color:#aaa;margin:6px 0 0;font-size:13px;">{today} · {len(articles)} top stories</p>
+    <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0;background:#f1f5f9;">
+      <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;margin-top:20px;margin-bottom:20px;box-shadow:0 4px 6px rgba(0,0,0,0.07);">
+
+        <!-- Header -->
+        <div style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 50%,#334155 100%);padding:32px 24px;text-align:center;">
+          <div style="font-size:36px;margin-bottom:8px;">📡</div>
+          <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:800;letter-spacing:-0.5px;">News Intelligence Digest</h1>
+          <p style="color:#94a3b8;margin:8px 0 0;font-size:14px;">{today}</p>
+          <div style="margin-top:12px;">
+            <span style="background:rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 14px;border-radius:20px;font-size:13px;font-weight:600;">{count} top stories</span>
+          </div>
         </div>
+
+        <!-- Quick Stats -->
+        <div style="display:flex;text-align:center;padding:16px 8px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+          <table style="width:100%;"><tr>
+            <td style="text-align:center;padding:8px;">
+              <div style="font-size:20px;font-weight:800;color:#e74c3c;">{sum(1 for a in articles if a.get('priority',0) >= 70)}</div>
+              <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">High Priority</div>
+            </td>
+            <td style="text-align:center;padding:8px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
+              <div style="font-size:20px;font-weight:800;color:#f59e0b;">{sum(1 for a in articles if 50 <= a.get('priority',0) < 70)}</div>
+              <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">Medium</div>
+            </td>
+            <td style="text-align:center;padding:8px;">
+              <div style="font-size:20px;font-weight:800;color:#10b981;">{sum(1 for a in articles if a.get('priority',0) < 50)}</div>
+              <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">Notable</div>
+            </td>
+          </tr></table>
+        </div>
+
+        <!-- Articles -->
         <table style="width:100%;border-collapse:collapse;">
           {rows}
         </table>
-        <div style="padding:16px;text-align:center;color:#999;font-size:11px;">
-          Powered by News Intelligence Agent · Free & open source
+
+        <!-- Footer -->
+        <div style="padding:20px;text-align:center;background:#f8fafc;border-top:1px solid #e2e8f0;">
+          <p style="color:#94a3b8;font-size:11px;margin:0;">Powered by <strong>News Intelligence Agent</strong> · Free & open source</p>
+          <p style="color:#cbd5e1;font-size:10px;margin:4px 0 0;">Delivered automatically at 8:30 AM · Scoring 500+ sources every 2 min</p>
         </div>
       </div>
     </body>
@@ -181,8 +256,12 @@ def send_email_digest() -> bool:
         logger.warning("Email not configured — set EMAIL_FROM, EMAIL_PASSWORD, EMAIL_TO in .env")
         return False
 
-    # Get top articles from last 24 hours
-    articles = database.get_recent(limit=30, min_priority=config.MIN_PRIORITY_SCORE)
+    # Get top articles — prefer ones with real links, cap at 15
+    raw_articles = database.get_recent(limit=100, min_priority=config.MIN_PRIORITY_SCORE)
+    # Prioritise articles with real links
+    with_links = [a for a in raw_articles if _has_real_link(a.get("url", ""))]
+    without_links = [a for a in raw_articles if not _has_real_link(a.get("url", ""))]
+    articles = (with_links + without_links)[:15]
     if not articles:
         logger.info("No articles for email digest")
         return False
