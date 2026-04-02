@@ -3,6 +3,7 @@ Intelligence layer — uses an LLM to summarise, score, tag, and cluster article
 Priority: Google Gemini (free) → OpenAI (paid) → heuristic fallback.
 """
 
+import asyncio
 import json
 import logging
 import re
@@ -228,26 +229,60 @@ async def analyse(articles: list[RawArticle]) -> list[AnalysedArticle]:
 
     has_llm = config.GEMINI_API_KEY or config.OPENAI_API_KEY
 
-    # Process in batches of 15 for the LLM
-    BATCH_SIZE = 15
-    all_results: list[dict] = []
+    # Step 1: Score ALL articles with fast heuristics first
+    heuristic_results = [_heuristic_score(a) for a in articles]
 
-    if has_llm:
-        for i in range(0, len(articles), BATCH_SIZE):
-            batch = articles[i : i + BATCH_SIZE]
+    if not has_llm:
+        logger.info("No LLM API key set — using heuristic scoring")
+        all_results = heuristic_results
+    else:
+        # Step 2: Only send the top-scoring articles to the LLM (saves quota)
+        MAX_LLM_ARTICLES = 50
+        scored = sorted(
+            enumerate(articles),
+            key=lambda x: heuristic_results[x[0]].get("priority", 0),
+            reverse=True,
+        )
+        llm_indices = [idx for idx, _ in scored[:MAX_LLM_ARTICLES]]
+        llm_articles = [articles[idx] for idx in llm_indices]
+
+        logger.info(
+            "Sending top %d/%d articles to LLM (%s)",
+            len(llm_articles),
+            len(articles),
+            _get_llm_name(),
+        )
+
+        # Step 3: Process in batches with rate-limiting (Gemini free = 15 RPM)
+        BATCH_SIZE = 10
+        llm_results_map: dict[int, dict] = {}
+
+        for batch_num, i in enumerate(range(0, len(llm_articles), BATCH_SIZE)):
+            if batch_num > 0:
+                # Wait 5s between batches to stay under 15 RPM
+                await asyncio.sleep(5)
+
+            batch = llm_articles[i : i + BATCH_SIZE]
+            batch_indices = llm_indices[i : i + BATCH_SIZE]
             llm_results = await _llm_analyse_batch(batch)
+
             if len(llm_results) == len(batch):
-                all_results.extend(llm_results)
+                for idx, result in zip(batch_indices, llm_results):
+                    llm_results_map[idx] = result
             else:
                 logger.warning(
                     "LLM returned %d results for %d articles, using heuristics",
                     len(llm_results),
                     len(batch),
                 )
-                all_results.extend(_heuristic_score(a) for a in batch)
-    else:
-        logger.info("No LLM API key set — using heuristic scoring")
-        all_results = [_heuristic_score(a) for a in articles]
+
+        # Step 4: Merge — use LLM results where available, heuristics for rest
+        all_results = []
+        for i in range(len(articles)):
+            if i in llm_results_map:
+                all_results.append(llm_results_map[i])
+            else:
+                all_results.append(heuristic_results[i])
 
     # Build AnalysedArticle objects and apply filters
     analysed: list[AnalysedArticle] = []

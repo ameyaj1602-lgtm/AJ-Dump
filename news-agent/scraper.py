@@ -38,7 +38,7 @@ async def scrape_reddit(client: httpx.AsyncClient) -> list[RawArticle]:
     for sub in subreddits:
         try:
             resp = await client.get(
-                f"https://www.reddit.com/r/{sub}/hot.json?limit=15",
+                f"https://www.reddit.com/r/{sub}/hot.json?limit=10",
                 headers={**_HEADERS, "Accept": "application/json"},
                 timeout=15,
             )
@@ -191,7 +191,8 @@ async def scrape_hackernews(client: httpx.AsyncClient) -> list[RawArticle]:
 async def scrape_google_news(client: httpx.AsyncClient) -> list[RawArticle]:
     """Scrape Google News search results for breaking news."""
     articles: list[RawArticle] = []
-    queries = ["breaking news", "top stories today"]
+    MAX_PER_QUERY = 20  # Cap to avoid flooding with low-quality results
+    queries = ["breaking news today"]
 
     for query in queries:
         try:
@@ -210,9 +211,12 @@ async def scrape_google_news(client: httpx.AsyncClient) -> list[RawArticle]:
                 r'<a[^>]*class="[^"]*JtKRv[^"]*"[^>]*>([^<]+)</a>',
                 re.IGNORECASE,
             )
+            count = 0
             for match in title_pattern.finditer(resp.text):
+                if count >= MAX_PER_QUERY:
+                    break
                 title = match.group(1).strip()
-                if title and len(title) > 10:
+                if title and len(title) > 15:
                     articles.append(
                         RawArticle(
                             title=title,
@@ -221,8 +225,9 @@ async def scrape_google_news(client: httpx.AsyncClient) -> list[RawArticle]:
                             description="",
                         )
                     )
+                    count += 1
 
-            logger.info("Google News scrape '%s' → %d items", query, len(articles))
+            logger.info("Google News scrape '%s' → %d items", query, count)
         except Exception as exc:
             logger.warning("Google News scrape failed: %s", exc)
 
