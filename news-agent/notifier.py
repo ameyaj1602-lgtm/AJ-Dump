@@ -176,10 +176,19 @@ def _build_email_html(articles: list[dict]) -> str:
         if summary and summary.lower()[:40] != title.lower()[:40]:
             summary_html = f'<div style="color:#64748b;font-size:13px;margin-top:6px;line-height:1.5;">{summary[:180]}</div>'
 
-        # Read button
+        # Action buttons
+        from urllib.parse import quote
+        google_search = f"https://www.google.com/search?q={quote(title[:80])}&tbm=nws"
+        twitter_search = f"https://x.com/search?q={quote(title[:60])}&f=live"
+
+        btn_style = "display:inline-block;margin-top:8px;margin-right:6px;padding:6px 14px;text-decoration:none;border-radius:6px;font-size:11px;font-weight:600;"
+
         read_btn = ""
         if has_link:
-            read_btn = f'<a href="{url}" style="display:inline-block;margin-top:8px;padding:6px 16px;background:{color};color:white;text-decoration:none;border-radius:6px;font-size:12px;font-weight:600;">Read →</a>'
+            read_btn = f'<a href="{url}" style="{btn_style}background:{color};color:white;">Read →</a>'
+
+        search_btn = f'<a href="{google_search}" style="{btn_style}background:#4285f4;color:white;">🔍 Google</a>'
+        twitter_btn = f'<a href="{twitter_search}" style="{btn_style}background:#0f1419;color:white;">𝕏 Posts</a>'
 
         rows += f"""
         <tr>
@@ -193,7 +202,8 @@ def _build_email_html(articles: list[dict]) -> str:
                   </div>
                   {title_html}
                   {summary_html}
-                  <div style="margin-top:10px;">{tag_badges} {read_btn}</div>
+                  <div style="margin-top:10px;">{tag_badges}</div>
+                  <div style="margin-top:8px;">{read_btn}{search_btn}{twitter_btn}</div>
                 </td>
               </tr></table>
             </div>

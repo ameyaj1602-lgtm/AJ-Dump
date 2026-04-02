@@ -50,12 +50,20 @@ RSS_FEEDS = [
     "https://feeds.arstechnica.com/arstechnica/index",
     "https://www.theverge.com/rss/index.xml",
     "https://www.wired.com/feed/rss",
-    # Finance
+    # Finance / Business
     "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
-    # India
+    # India — News
+    "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
     "https://economictimes.indiatimes.com/rssfeedstopstories.cms",
     "https://indianexpress.com/feed/",
     "https://timesofindia.indiatimes.com/rssfeedstopstories.cms",
+    "https://www.thehindu.com/news/feeder/default.rss",
+    "https://www.livemint.com/rss/news",
+    "https://www.livemint.com/rss/companies",
+    "https://www.livemint.com/rss/technology",
+    "https://www.business-standard.com/rss/home_page_top_stories.rss",
+    "https://www.moneycontrol.com/rss/latestnews.xml",
+    "https://www.ndtv.com/rss/top-stories",
     # Hacker News
     "https://hnrss.org/frontpage",
 ]
