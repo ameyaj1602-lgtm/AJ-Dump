@@ -23,6 +23,16 @@ NEWS_API_KEY = os.getenv("NEWS_API_KEY", "")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
+# ── Email Digest ──────────────────────────────────────────────────────────────
+EMAIL_ENABLED = os.getenv("EMAIL_ENABLED", "false").lower() in ("true", "1", "yes")
+EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
+EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+EMAIL_FROM = os.getenv("EMAIL_FROM", "")         # your Gmail address
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")  # Gmail App Password
+EMAIL_TO = os.getenv("EMAIL_TO", "")              # recipient (can be same as FROM)
+EMAIL_DIGEST_HOUR = int(os.getenv("EMAIL_DIGEST_HOUR", "8"))    # 24h format
+EMAIL_DIGEST_MINUTE = int(os.getenv("EMAIL_DIGEST_MINUTE", "30"))
+
 # ── Polling ───────────────────────────────────────────────────────────────────
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "120"))
 

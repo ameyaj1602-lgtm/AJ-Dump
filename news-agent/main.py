@@ -98,18 +98,28 @@ async def run_loop():
     logger.info("🚀 News Intelligence Agent started")
     logger.info("   RSS feeds: %d | Poll: %ds | Min score: %d",
                 len(config.RSS_FEEDS), config.POLL_INTERVAL_SECONDS, config.MIN_PRIORITY_SCORE)
-    logger.info("   Gemini: %s | Telegram: %s",
+    logger.info("   Gemini: %s | Telegram: %s | Email: %s",
                 "on" if config.GEMINI_API_KEY else "off",
-                "on" if config.TELEGRAM_BOT_TOKEN else "off")
+                "on" if config.TELEGRAM_BOT_TOKEN else "off",
+                f"on ({config.EMAIL_DIGEST_HOUR}:{config.EMAIL_DIGEST_MINUTE:02d})" if config.EMAIL_ENABLED else "off")
 
     consecutive_failures = 0
     cycle_count = 0
+    digest_sent_today = False
 
     while _running:
         try:
             await run_cycle()
             consecutive_failures = 0
             cycle_count += 1
+
+            # Daily email digest at configured time
+            if notifier.should_send_digest() and not digest_sent_today:
+                notifier.send_email_digest()
+                digest_sent_today = True
+            # Reset flag after the digest window passes
+            if not notifier.should_send_digest():
+                digest_sent_today = False
 
             # Periodic DB cleanup every 10 cycles
             if cycle_count % 10 == 0:
@@ -166,9 +176,15 @@ def main():
     parser = argparse.ArgumentParser(description="Real-Time News Intelligence Agent")
     parser.add_argument("--once", action="store_true", help="Run one cycle and exit")
     parser.add_argument("--dashboard", action="store_true", help="Show recent alerts")
+    parser.add_argument("--email", action="store_true", help="Send email digest now")
     args = parser.parse_args()
 
-    if args.dashboard:
+    if args.email:
+        ok = notifier.send_email_digest()
+        if not ok:
+            print("Failed — check EMAIL_* settings in .env")
+        return
+    elif args.dashboard:
         show_dashboard()
     elif args.once:
         asyncio.run(run_cycle())
