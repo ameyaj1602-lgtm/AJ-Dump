@@ -1,0 +1,46 @@
+name: Daily News Digest
+
+on:
+  schedule:
+    # 3:00 AM UTC = 8:30 AM IST (close enough — GitHub cron doesn't support :30)
+    # Using 3:00 UTC = 8:30 AM IST
+    - cron: '0 3 * * *'
+  workflow_dispatch: # Manual trigger button on GitHub
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: news-agent
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install feedparser httpx python-dotenv
+
+      - name: Create .env file
+        run: |
+          cat > .env << EOF
+          EMAIL_ENABLED=true
+          EMAIL_FROM=${{ secrets.EMAIL_FROM }}
+          EMAIL_PASSWORD=${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO=${{ secrets.EMAIL_TO }}
+          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
+          MIN_PRIORITY_SCORE=40
+          EOF
+
+      - name: Fetch news
+        run: python main.py --once
+        timeout-minutes: 5
+
+      - name: Send email digest
+        run: python main.py --email
+        timeout-minutes: 2
