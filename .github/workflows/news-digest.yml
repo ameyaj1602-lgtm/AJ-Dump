@@ -2,10 +2,8 @@ name: Daily News Digest
 
 on:
   schedule:
-    # 3:00 AM UTC = 8:30 AM IST (close enough — GitHub cron doesn't support :30)
-    # Using 3:00 UTC = 8:30 AM IST
     - cron: '0 3 * * *'
-  workflow_dispatch: # Manual trigger button on GitHub
+  workflow_dispatch:
 
 jobs:
   send-digest:
@@ -27,15 +25,18 @@ jobs:
         run: pip install feedparser httpx python-dotenv
 
       - name: Create .env file
+        env:
+          EMAIL_FROM: ${{ secrets.EMAIL_FROM }}
+          EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
+          EMAIL_TO: ${{ secrets.EMAIL_TO }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
-          cat > .env << EOF
-          EMAIL_ENABLED=true
-          EMAIL_FROM=${{ secrets.EMAIL_FROM }}
-          EMAIL_PASSWORD=${{ secrets.EMAIL_PASSWORD }}
-          EMAIL_TO=${{ secrets.EMAIL_TO }}
-          GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}
-          MIN_PRIORITY_SCORE=40
-          EOF
+          echo "EMAIL_ENABLED=true" > .env
+          echo "EMAIL_FROM=${EMAIL_FROM}" >> .env
+          echo "EMAIL_PASSWORD=${EMAIL_PASSWORD}" >> .env
+          echo "EMAIL_TO=${EMAIL_TO}" >> .env
+          echo "GEMINI_API_KEY=${GEMINI_API_KEY}" >> .env
+          echo "MIN_PRIORITY_SCORE=40" >> .env
 
       - name: Fetch news
         run: python main.py --once
