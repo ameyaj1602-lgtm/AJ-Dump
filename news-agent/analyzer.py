@@ -1,6 +1,9 @@
 """
 Intelligence layer — uses an LLM to summarise, score, tag, and cluster articles.
 Priority: Google Gemini (free) → OpenAI (paid) → smart heuristic fallback.
+
+v2: Improved quality — stronger junk filter, source tiers, freshness boost,
+    title quality checks, duplicate pattern detection, category-aware scoring.
 """
 
 import asyncio
@@ -124,21 +127,83 @@ async def _llm_analyse_batch(articles: list[RawArticle]) -> list[dict]:
     return []
 
 
-# ── Smart Heuristic Scoring ──────────────────────────────────────────────────
+# ── Smart Heuristic Scoring (v2 — much stricter) ───────────────────────────
 
-_JUNK_PATTERNS = [
-    "livestream", "live stream", "watch here", "watch live",
-    "weather forecast", "weather today", "weather |",
-    "horoscope", "crossword", "sudoku", "quiz:",
-    "nfl draft", "nfl free agency", "fantasy football",
-    "transfer news", "transfer rumours", "transfer centre",
-    "odds and predictions", "betting", "sportsbook",
-    "daily briefing", "podcast", "opinion:", "editorial:",
-    "sponsored", "promoted", "advertisement", "photo gallery",
-    "video:", "best deals", "how to ",
+# Hard-kill: these get score = 0 instantly
+_KILL_PATTERNS = [
+    "horoscope", "crossword", "sudoku", "quiz:", "wordle",
+    "best deals", "coupon", "promo code", "discount code",
+    "sponsored", "promoted", "advertisement", "advertorial",
+    "photo gallery", "in pictures", "pictures of the week",
+    "recipe:", "recipes for", "cooking tips",
+    "daily briefing", "morning briefing", "evening briefing",
+    "newsletter signup", "subscribe now",
 ]
 
-_CLICKBAIT = ["you won't believe", "this is why", "here's why", "what happened next"]
+# Strong penalty: -40
+_JUNK_PATTERNS = [
+    "livestream", "live stream", "watch here", "watch live", "live updates",
+    "weather forecast", "weather today", "weather |", "weather alert",
+    "nfl draft", "nfl free agency", "fantasy football", "fantasy sports",
+    "transfer news", "transfer rumours", "transfer centre", "transfer window",
+    "odds and predictions", "betting", "sportsbook", "parlay",
+    "podcast:", "podcast episode", "listen to", "watch:",
+    "opinion:", "editorial:", "op-ed:", "letter to the editor",
+    "obituary", "death notice",
+    "video:", "slideshow", "photos:", "gallery:",
+    "how to ", "tips for ", "ways to ", "guide to ",
+    "review:", "hands-on:", "unboxing",
+    "best of", "top 10", "top 5", "ranked:",
+]
+
+# Clickbait: -15
+_CLICKBAIT = [
+    "you won't believe", "this is why", "here's why", "what happened next",
+    "shocked everyone", "the truth about", "you need to know",
+    "is it worth", "we tried", "i tried", "we tested",
+    "everything you need to know", "explained:", "what is",
+]
+
+# Low-value repetitive patterns: -20
+_LOW_VALUE = [
+    "stock price today", "share price", "stock to buy",
+    "ipl ", "ipl:", "cricket score", "match preview", "match prediction",
+    "daily digest", "morning news", "evening news",
+    "what's new in", "what's coming",
+]
+
+# Source quality tiers
+_TIER1_SOURCES = [
+    "reuters", "bbc", "al jazeera", "guardian", "financial times",
+    "wall street journal", "new york times", "washington post",
+    "economist", "bloomberg",
+]
+_TIER2_SOURCES = [
+    "techcrunch", "ars technica", "the verge", "wired", "cnbc",
+    "hacker news", "economic times", "indian express", "times of india",
+    "cnn", "npr", "livemint", "moneycontrol", "the hindu",
+]
+
+
+def _title_quality_score(title: str) -> int:
+    """Penalise low-quality titles."""
+    score = 0
+    # Too short = probably garbage
+    if len(title) < 25:
+        score -= 15
+    # ALL CAPS = clickbait
+    if title.isupper() and len(title) > 20:
+        score -= 10
+    # Ends with "?" and short = clickbait
+    if title.endswith("?") and len(title) < 50:
+        score -= 8
+    # Starts with number list = listicle
+    if re.match(r"^\d+\s+(best|top|ways|things|reasons|tips)", title.lower()):
+        score -= 20
+    # Has actual substance indicators
+    if any(w in title.lower() for w in ["announces", "launches", "acquires", "raises", "reports", "confirms", "reveals"]):
+        score += 8
+    return score
 
 
 def _make_summary(title: str, description: str) -> str:
@@ -165,107 +230,173 @@ def _heuristic_score(article: RawArticle) -> dict:
     text = f"{title} {article.description}".lower()
     score = 0
 
-    # Junk filter
+    # ── HARD KILL ──
+    for kill in _KILL_PATTERNS:
+        if kill in text:
+            return {"summary": _make_summary(title, article.description),
+                    "tags": ["junk"], "priority": 0, "cluster": "junk"}
+
+    # ── Junk filter (-40) ──
     for junk in _JUNK_PATTERNS:
         if junk in text:
-            score -= 50
+            score -= 40
             break
 
-    # Clickbait penalty
+    # ── Clickbait penalty (-15) ──
     for bait in _CLICKBAIT:
         if bait in text:
-            score -= 10
+            score -= 15
             break
-    if title.endswith("?") and len(title) < 50:
-        score -= 5
 
-    # Source quality
+    # ── Low-value patterns (-20) ──
+    for low in _LOW_VALUE:
+        if low in text:
+            score -= 20
+            break
+
+    # ── Title quality ──
+    score += _title_quality_score(title)
+
+    # ── Source quality (tiered) ──
     source_lower = article.source.lower()
-    high_quality = ["techcrunch", "reuters", "bbc", "ars technica", "hacker news",
-                    "economic times", "al jazeera", "the verge", "wired", "cnbc",
-                    "guardian", "cnn", "indian express", "times of india", "npr"]
-    if any(s in source_lower for s in high_quality):
-        score += 15
+    if any(s in source_lower for s in _TIER1_SOURCES):
+        score += 20
+    elif any(s in source_lower for s in _TIER2_SOURCES):
+        score += 12
+    elif source_lower.startswith("r/"):
+        score += 8
     elif "google news" in source_lower:
         score += 5
-    elif source_lower.startswith("r/"):
-        score += 10
 
-    # Urgency (strong)
-    for w in ["breaking:", "just in:", "urgent:", "developing:"]:
+    # ── URGENCY (strong — +30) ──
+    for w in ["breaking:", "just in:", "urgent:", "developing:", "alert:"]:
         if w in text:
             score += 30
             break
 
-    # Urgency (medium)
-    for w in ["breaking news", "just announced", "confirms", "revealed", "emergency",
-              "earthquake", "tsunami", "explosion", "assassination", "coup"]:
+    # ── URGENCY (medium — +20) ──
+    urgency_medium = [
+        "breaking news", "just announced", "confirms", "revealed",
+        "emergency", "earthquake", "tsunami", "explosion",
+        "assassination", "coup", "declares war", "invaded",
+        "mass shooting", "terrorist", "nuclear",
+    ]
+    for w in urgency_medium:
         if w in text:
             score += 20
             break
 
-    # Market impact (high)
-    for w in ["ipo", "acquisition", "acquires", "merger", "buys for",
-              "raises $", "billion", "trillion", "market crash", "stock plunge", "stock surge"]:
+    # ── MARKET IMPACT (high — +25) ──
+    market_high = [
+        "ipo", "acquisition", "acquires", "merger", "buys for",
+        "raises $", "billion", "trillion", "market crash",
+        "stock plunge", "stock surge", "recession",
+    ]
+    for w in market_high:
         if w in text:
             score += 25
             break
 
-    # Market impact (medium)
-    for w in ["funding", "valuation", "layoffs", "lays off", "cuts jobs",
-              "files for", "goes public", "stock market", "oil price",
-              "interest rate", "tariff", "sanctions"]:
+    # ── MARKET IMPACT (medium — +15) ──
+    market_med = [
+        "funding", "valuation", "layoffs", "lays off", "cuts jobs",
+        "files for", "goes public", "stock market", "oil price",
+        "interest rate", "tariff", "sanctions", "trade war",
+        "inflation", "gdp ", "rbi ", "fed ",
+    ]
+    for w in market_med:
         if w in text:
             score += 15
             break
 
-    # User keyword boost
+    # ── User keyword boost (capped) ──
     keyword_hits = sum(1 for kw in config.PRIORITY_KEYWORDS if kw.lower() in text)
     score += min(keyword_hits * 8, 32)
 
-    # Virality
-    for w in ["shocking", "massive", "historic", "unprecedented", "first ever",
-              "record-breaking", "millions", "exclusive"]:
+    # ── VIRALITY / IMPACT ──
+    impact_words = [
+        "historic", "unprecedented", "first ever", "record-breaking",
+        "millions", "exclusive", "leaked", "whistleblower",
+        "major update", "game changer",
+    ]
+    for w in impact_words:
         if w in text:
-            score += 10
+            score += 12
             break
 
-    # Tech/AI signals
-    tech_signals = ["openai", "chatgpt", "claude", "gemini", "gpt-", "llm",
-                    "artificial intelligence", "neural", "robot", "autonomous", "quantum"]
+    # ── TECH/AI signals (stacked) ──
+    tech_signals = [
+        "openai", "chatgpt", "claude", "gemini", "gpt-", "llm",
+        "artificial intelligence", "neural", "autonomous", "quantum",
+        "anthropic", "meta ai", "deepmind", "midjourney", "stable diffusion",
+        "apple intelligence", "copilot",
+    ]
     tech_hits = sum(1 for w in tech_signals if w in text)
     if tech_hits:
-        score += 10 + (tech_hits * 3)
+        score += 10 + (tech_hits * 5)
 
-    # Description quality bonus
+    # ── INDIA BUSINESS signals ──
+    india_biz = [
+        "sensex", "nifty", "bse", "nse", "sebi", "rbi",
+        "mukesh ambani", "adani", "tata", "infosys", "wipro", "reliance",
+        "zomato", "swiggy", "flipkart", "paytm", "razorpay",
+        "unicorn", "indian startup", "india gdp",
+    ]
+    india_hits = sum(1 for w in india_biz if w in text)
+    if india_hits:
+        score += 8 + (india_hits * 4)
+
+    # ── GEOPOLITICS boost ──
+    geo_words = [
+        "nato", "un security council", "g20", "g7",
+        "china taiwan", "russia ukraine", "israel",
+        "nuclear deal", "peace deal", "ceasefire",
+        "trade agreement", "summit",
+    ]
+    for w in geo_words:
+        if w in text:
+            score += 15
+            break
+
+    # ── Description quality bonus ──
     if len(article.description) > 100:
-        for verb in ["announces", "launches", "confirms", "reveals", "acquires", "raises"]:
+        for verb in ["announces", "launches", "confirms", "reveals", "acquires", "raises", "reports"]:
             if verb in article.description.lower():
                 score += 5
                 break
 
+    # ── URL quality bonus ──
+    url = article.url.lower()
+    if url and not any(generic in url for generic in ["google.com", "reddit.com", "trends24"]):
+        score += 3  # has a real source link
+
     # Normalise to 0–100
     score = max(0, min(100, score + 25))
 
-    # Tags
+    # ── Tags ──
     tags = []
     tag_map = {
         "ai": ["ai ", " ai,", "artificial intelligence", "machine learning", "gpt", "llm",
-               "chatgpt", "openai", "claude", "gemini", "deep learning", "neural net", "robot"],
+               "chatgpt", "openai", "claude", "gemini", "deep learning", "neural net",
+               "anthropic", "midjourney", "copilot", "deepmind"],
         "finance": ["stock", "market", "ipo", "funding", "billion", "valuation", "investor",
-                     "revenue", "profit", "oil price", "interest rate", "inflation", "economy"],
+                     "revenue", "profit", "oil price", "interest rate", "inflation", "economy",
+                     "sensex", "nifty", "rbi", "fed ", "gdp"],
         "startups": ["startup", "founder", "seed round", "series a", "series b",
-                     "y combinator", "yc ", "venture", "accelerator"],
+                     "y combinator", "yc ", "venture", "accelerator", "unicorn"],
         "geopolitics": ["war ", "sanction", "treaty", "nato", "iran", "china", "russia",
-                        "ukraine", "missile", "military", "troops", "diplomat"],
+                        "ukraine", "missile", "military", "troops", "diplomat", "g20", "g7"],
         "tech": ["google", "apple", "microsoft", "meta ", "amazon", "nvidia", "tesla",
-                 "spacex", "samsung", "intel"],
-        "security": ["hack", "breach", "cyber", "vulnerability", "malware", "ransomware", "data leak"],
-        "science": ["nasa", "artemis", "space", "quantum", "research", "discovery", "study finds", "scientists"],
-        "india": ["india", "modi", "rupee", "sensex", "nifty", "mumbai", "delhi", "bengaluru", "kerala"],
-        "crypto": ["bitcoin", "ethereum", "crypto", "blockchain", "defi", "nft", "web3"],
+                 "spacex", "samsung", "intel", "tsmc", "qualcomm"],
+        "security": ["hack", "breach", "cyber", "vulnerability", "malware", "ransomware",
+                     "data leak", "zero day", "exploit"],
+        "science": ["nasa", "artemis", "space", "quantum", "research", "discovery",
+                    "study finds", "scientists", "mars", "cern"],
+        "india": ["india", "modi", "rupee", "sensex", "nifty", "mumbai", "delhi",
+                  "bengaluru", "kerala", "sebi", "adani", "ambani", "tata"],
+        "crypto": ["bitcoin", "ethereum", "crypto", "blockchain", "defi", "nft", "web3", "solana"],
         "health": ["covid", "pandemic", "vaccine", "who ", "fda", "disease", "hospital", "drug"],
-        "climate": ["climate", "carbon", "emissions", "renewable", "solar", "wind energy"],
+        "climate": ["climate", "carbon", "emissions", "renewable", "solar", "wind energy", "ev "],
         "legal": ["supreme court", "lawsuit", "ruling", "verdict", "indictment", "sentenced"],
     }
     for tag, keywords in tag_map.items():
@@ -282,13 +413,28 @@ def _heuristic_score(article: RawArticle) -> dict:
     }
 
 
-# ── Filtering ─────────────────────────────────────────────────────────────────
+# ── Filtering ─────────────────────────────────────────────────────────────
 
 def _passes_filters(article: RawArticle, analysis: dict) -> bool:
     if not config.FILTER_KEYWORDS:
         return True
     text = f"{article.title} {article.description} {analysis.get('summary', '')}".lower()
     return any(kw.lower() in text for kw in config.FILTER_KEYWORDS)
+
+
+# ── Source Diversity ─────────────────────────────────────────────────────────
+
+def _enforce_source_diversity(articles: list['AnalysedArticle'], max_per_source: int = 3) -> list['AnalysedArticle']:
+    """Cap articles per source to ensure variety in the digest."""
+    source_counts: dict[str, int] = {}
+    diverse: list[AnalysedArticle] = []
+    for a in articles:
+        key = a.source.lower().split(" - ")[0].split(" | ")[0][:30]
+        count = source_counts.get(key, 0)
+        if count < max_per_source:
+            diverse.append(a)
+            source_counts[key] = count + 1
+    return diverse
 
 
 # ── Public API ────────────────────────────────────────────────────────────────
@@ -362,5 +508,9 @@ async def analyse(articles: list[RawArticle]) -> list[AnalysedArticle]:
         ))
 
     analysed.sort(key=lambda a: a.priority, reverse=True)
+
+    # Source diversity — max 3 from same source
+    analysed = _enforce_source_diversity(analysed, max_per_source=3)
+
     logger.info("Analysis: %d articles passed filters (min score %d)", len(analysed), config.MIN_PRIORITY_SCORE)
     return analysed

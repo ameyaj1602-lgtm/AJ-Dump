@@ -1,16 +1,19 @@
 """
 Alerting layer — Telegram, Email digest, CLI dashboard.
-Features: daily email at 8:30 AM, Telegram alerts, dynamic dashboard.
+v2: Completely redesigned email with dark mode header, category sections,
+    numbered rankings, mobile-friendly layout, and polished card design.
 """
 
 import asyncio
 import logging
 import shutil
 import smtplib
+from collections import defaultdict
 from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from html import unescape
+from urllib.parse import quote
 
 import httpx
 
@@ -67,7 +70,6 @@ def _escape_html(text: str) -> str:
 # ── CLI Dashboard ─────────────────────────────────────────────────────────────
 
 def print_dashboard(articles: list[AnalysedArticle]) -> None:
-    # Filter and cap
     articles = [a for a in articles if a.priority >= config.MIN_PRIORITY_SCORE]
     articles = articles[:config.DASHBOARD_MAX_ARTICLES]
 
@@ -91,7 +93,6 @@ def print_dashboard(articles: list[AnalysedArticle]) -> None:
         emoji = "🔴" if a.priority >= 70 else "🟡" if a.priority >= 50 else "🟢"
         tags = " ".join(f"#{t}" for t in a.tags[:3])
 
-        # Clean up any remaining HTML entities
         title = unescape(a.title)
         summary = unescape(a.summary)
 
@@ -110,14 +111,13 @@ def print_dashboard(articles: list[AnalysedArticle]) -> None:
     print(f"  Showing top {len(articles)} articles (score >= {config.MIN_PRIORITY_SCORE})\n")
 
 
-# ── Email Digest ──────────────────────────────────────────────────────────────
+# ── Email Digest (v2 — Premium Redesign) ────────────────────────────────────
 
 _JUNK_URLS = ["https://news.google.com", "https://www.bbc.com/news",
               "https://text.npr.org/", "https://www.aljazeera.com/"]
 
 
 def _has_real_link(url: str) -> bool:
-    """Check if the URL is a real article link, not a generic homepage."""
     if not url:
         return False
     for junk in _JUNK_URLS:
@@ -126,136 +126,198 @@ def _has_real_link(url: str) -> bool:
     return url.startswith("http")
 
 
-def _build_email_html(articles: list[dict]) -> str:
-    """Build a premium HTML email digest."""
-    today = datetime.now().strftime("%A, %B %d, %Y")
-    count = len(articles)
+# Tag display config
+_TAG_COLORS = {
+    "ai": ("#7c3aed", "#f5f3ff"),
+    "finance": ("#059669", "#ecfdf5"),
+    "startups": ("#d97706", "#fffbeb"),
+    "geopolitics": ("#dc2626", "#fef2f2"),
+    "tech": ("#2563eb", "#eff6ff"),
+    "security": ("#be123c", "#fff1f2"),
+    "science": ("#0891b2", "#ecfeff"),
+    "india": ("#ea580c", "#fff7ed"),
+    "crypto": ("#7c3aed", "#faf5ff"),
+    "health": ("#16a34a", "#f0fdf4"),
+    "climate": ("#15803d", "#f0fdf4"),
+    "legal": ("#4338ca", "#eef2ff"),
+}
 
-    rows = ""
-    rank = 0
-    for a in articles:
-        title = unescape(a.get("title", ""))
-        summary = unescape(a.get("summary", ""))
-        source = a.get("source", "")
-        url = a.get("url", "")
-        priority = a.get("priority", 0)
-        tags = a.get("tags", "")
-        has_link = _has_real_link(url)
-        rank += 1
+_TAG_EMOJI = {
+    "ai": "🤖", "finance": "💰", "startups": "🚀", "geopolitics": "🌍",
+    "tech": "💻", "security": "🔒", "science": "🔬", "india": "🇮🇳",
+    "crypto": "₿", "health": "🏥", "climate": "🌱", "legal": "⚖️",
+    "general": "📰",
+}
 
-        if priority >= 70:
-            color = "#e74c3c"
-            bg = "#fef2f2"
-            badge = "🔴 HIGH"
-            border_color = "#e74c3c"
-        elif priority >= 50:
-            color = "#f59e0b"
-            bg = "#fffbeb"
-            badge = "🟡 MED"
-            border_color = "#f59e0b"
-        else:
-            color = "#10b981"
-            bg = "#f0fdf4"
-            badge = "🟢 LOW"
-            border_color = "#10b981"
 
-        tag_badges = ""
-        for t in (tags.split(",") if tags else [])[:4]:
-            t = t.strip()
-            if t and t != "general":
-                tag_badges += f'<span style="background:#f1f5f9;color:#475569;padding:3px 8px;border-radius:12px;font-size:11px;margin-right:4px;display:inline-block;">{t}</span>'
+def _build_article_card(a: dict, rank: int) -> str:
+    title = unescape(a.get("title", ""))
+    summary = unescape(a.get("summary", ""))
+    source = a.get("source", "")
+    url = a.get("url", "")
+    priority = a.get("priority", 0)
+    tags = a.get("tags", "")
+    has_link = _has_real_link(url)
 
-        # Title — clickable if real link exists
-        if has_link:
-            title_html = f'<a href="{url}" style="color:#0f172a;text-decoration:none;font-size:16px;font-weight:700;line-height:1.4;display:block;">{title}</a>'
-        else:
-            title_html = f'<span style="color:#0f172a;font-size:16px;font-weight:700;line-height:1.4;display:block;">{title}</span>'
+    # Priority styling
+    if priority >= 70:
+        accent = "#ef4444"
+        bg = "#fef2f2"
+        label = "HIGH"
+    elif priority >= 50:
+        accent = "#f59e0b"
+        bg = "#fffbeb"
+        label = "MEDIUM"
+    else:
+        accent = "#22c55e"
+        bg = "#f0fdf4"
+        label = "NOTABLE"
 
-        # Summary — only show if different from title
-        summary_html = ""
-        if summary and summary.lower()[:40] != title.lower()[:40]:
-            summary_html = f'<div style="color:#64748b;font-size:13px;margin-top:6px;line-height:1.5;">{summary[:180]}</div>'
+    # Tag pills
+    tag_pills = ""
+    for t in (tags.split(",") if tags else [])[:3]:
+        t = t.strip()
+        if t and t != "general":
+            fg, pill_bg = _TAG_COLORS.get(t, ("#64748b", "#f1f5f9"))
+            emoji = _TAG_EMOJI.get(t, "")
+            tag_pills += f'<span style="background:{pill_bg};color:{fg};padding:3px 10px;border-radius:20px;font-size:11px;font-weight:600;margin-right:4px;display:inline-block;border:1px solid {fg}22;">{emoji} {t}</span>'
 
-        # Action buttons
-        from urllib.parse import quote
-        google_search = f"https://www.google.com/search?q={quote(title[:80])}&tbm=nws"
-        twitter_search = f"https://x.com/search?q={quote(title[:60])}&f=live"
+    # Title
+    if has_link:
+        title_html = f'<a href="{url}" style="color:#1e293b;text-decoration:none;font-size:15px;font-weight:700;line-height:1.4;">{title}</a>'
+    else:
+        title_html = f'<span style="color:#1e293b;font-size:15px;font-weight:700;line-height:1.4;">{title}</span>'
 
-        btn_style = "display:inline-block;margin-top:8px;margin-right:6px;padding:6px 14px;text-decoration:none;border-radius:6px;font-size:11px;font-weight:600;"
+    # Summary
+    summary_html = ""
+    if summary and summary.lower()[:40] != title.lower()[:40]:
+        summary_html = f'<div style="color:#64748b;font-size:13px;margin-top:6px;line-height:1.5;">{summary[:160]}</div>'
 
-        read_btn = ""
-        if has_link:
-            read_btn = f'<a href="{url}" style="{btn_style}background:{color};color:white;">Read →</a>'
+    # Action buttons
+    google_url = f"https://www.google.com/search?q={quote(title[:80])}&tbm=nws"
+    x_url = f"https://x.com/search?q={quote(title[:60])}&f=live"
 
-        search_btn = f'<a href="{google_search}" style="{btn_style}background:#4285f4;color:white;">🔍 Google</a>'
-        twitter_btn = f'<a href="{twitter_search}" style="{btn_style}background:#0f1419;color:white;">𝕏 Posts</a>'
+    btn_base = "display:inline-block;margin-top:10px;margin-right:6px;padding:7px 16px;text-decoration:none;border-radius:8px;font-size:11px;font-weight:700;letter-spacing:0.3px;"
 
-        rows += f"""
-        <tr>
-          <td style="padding:0;">
-            <div style="margin:8px 16px;padding:16px;background:{bg};border-left:4px solid {border_color};border-radius:8px;">
-              <table style="width:100%;"><tr>
-                <td style="vertical-align:top;">
-                  <div style="margin-bottom:8px;">
-                    <span style="background:{color};color:white;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:700;letter-spacing:0.5px;">{priority}</span>
-                    <span style="color:#94a3b8;font-size:12px;margin-left:8px;">{source}</span>
-                  </div>
-                  {title_html}
-                  {summary_html}
-                  <div style="margin-top:10px;">{tag_badges}</div>
-                  <div style="margin-top:8px;">{read_btn}{search_btn}{twitter_btn}</div>
-                </td>
-              </tr></table>
-            </div>
-          </td>
-        </tr>"""
+    buttons = ""
+    if has_link:
+        buttons += f'<a href="{url}" style="{btn_base}background:{accent};color:white;">Read Article →</a>'
+    buttons += f'<a href="{google_url}" style="{btn_base}background:#1a73e8;color:white;">🔍 Google</a>'
+    buttons += f'<a href="{x_url}" style="{btn_base}background:#000000;color:white;">𝕏 Search</a>'
 
     return f"""
-    <html>
-    <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;margin:0;padding:0;background:#f1f5f9;">
-      <div style="max-width:640px;margin:0 auto;background:#ffffff;border-radius:12px;overflow:hidden;margin-top:20px;margin-bottom:20px;box-shadow:0 4px 6px rgba(0,0,0,0.07);">
-
-        <!-- Header -->
-        <div style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 50%,#334155 100%);padding:32px 24px;text-align:center;">
-          <div style="font-size:36px;margin-bottom:8px;">📡</div>
-          <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:800;letter-spacing:-0.5px;">News Intelligence Digest</h1>
-          <p style="color:#94a3b8;margin:8px 0 0;font-size:14px;">{today}</p>
-          <div style="margin-top:12px;">
-            <span style="background:rgba(255,255,255,0.15);color:#e2e8f0;padding:4px 14px;border-radius:20px;font-size:13px;font-weight:600;">{count} top stories</span>
+    <tr><td style="padding:6px 16px;">
+      <div style="background:{bg};border-left:4px solid {accent};border-radius:12px;padding:18px 20px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+        <table style="width:100%;border-collapse:collapse;"><tr><td>
+          <!-- Rank + Score + Source -->
+          <div style="margin-bottom:10px;display:flex;align-items:center;">
+            <span style="background:{accent};color:white;padding:2px 10px;border-radius:6px;font-size:12px;font-weight:800;letter-spacing:0.5px;">#{rank}</span>
+            <span style="background:{accent}18;color:{accent};padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700;margin-left:6px;">{priority}/100 {label}</span>
+            <span style="color:#94a3b8;font-size:12px;margin-left:8px;">via {source[:30]}</span>
           </div>
-        </div>
-
-        <!-- Quick Stats -->
-        <div style="display:flex;text-align:center;padding:16px 8px;background:#f8fafc;border-bottom:1px solid #e2e8f0;">
-          <table style="width:100%;"><tr>
-            <td style="text-align:center;padding:8px;">
-              <div style="font-size:20px;font-weight:800;color:#e74c3c;">{sum(1 for a in articles if a.get('priority',0) >= 70)}</div>
-              <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">High Priority</div>
-            </td>
-            <td style="text-align:center;padding:8px;border-left:1px solid #e2e8f0;border-right:1px solid #e2e8f0;">
-              <div style="font-size:20px;font-weight:800;color:#f59e0b;">{sum(1 for a in articles if 50 <= a.get('priority',0) < 70)}</div>
-              <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">Medium</div>
-            </td>
-            <td style="text-align:center;padding:8px;">
-              <div style="font-size:20px;font-weight:800;color:#10b981;">{sum(1 for a in articles if a.get('priority',0) < 50)}</div>
-              <div style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:1px;">Notable</div>
-            </td>
-          </tr></table>
-        </div>
-
-        <!-- Articles -->
-        <table style="width:100%;border-collapse:collapse;">
-          {rows}
-        </table>
-
-        <!-- Footer -->
-        <div style="padding:20px;text-align:center;background:#f8fafc;border-top:1px solid #e2e8f0;">
-          <p style="color:#94a3b8;font-size:11px;margin:0;">Powered by <strong>News Intelligence Agent</strong> · Free & open source</p>
-          <p style="color:#cbd5e1;font-size:10px;margin:4px 0 0;">Delivered automatically at 8:30 AM · Scoring 500+ sources every 2 min</p>
-        </div>
+          <!-- Title -->
+          <div>{title_html}</div>
+          {summary_html}
+          <!-- Tags -->
+          <div style="margin-top:10px;">{tag_pills}</div>
+          <!-- Buttons -->
+          <div>{buttons}</div>
+        </td></tr></table>
       </div>
-    </body>
-    </html>"""
+    </td></tr>"""
+
+
+def _build_email_html(articles: list[dict]) -> str:
+    today = datetime.now().strftime("%A, %B %d, %Y")
+    now_time = datetime.now().strftime("%I:%M %p")
+    count = len(articles)
+
+    high = sum(1 for a in articles if a.get('priority', 0) >= 70)
+    med = sum(1 for a in articles if 50 <= a.get('priority', 0) < 70)
+    low = sum(1 for a in articles if a.get('priority', 0) < 50)
+
+    # Collect unique tags for summary
+    all_tags = set()
+    for a in articles:
+        for t in (a.get("tags", "").split(",") if a.get("tags") else []):
+            t = t.strip()
+            if t and t != "general":
+                all_tags.add(t)
+
+    tag_summary = " ".join(f'{_TAG_EMOJI.get(t, "📌")} {t.title()}' for t in sorted(all_tags)[:8])
+
+    # Build article cards
+    cards_html = ""
+    for i, a in enumerate(articles):
+        cards_html += _build_article_card(a, i + 1)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"></head>
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;margin:0;padding:0;background:#f0f2f5;-webkit-font-smoothing:antialiased;">
+
+  <!-- Wrapper -->
+  <div style="max-width:620px;margin:0 auto;padding:16px;">
+
+    <!-- Header Card -->
+    <div style="background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);border-radius:16px;padding:32px 28px;text-align:center;margin-bottom:12px;">
+      <div style="font-size:42px;margin-bottom:4px;">📡</div>
+      <h1 style="color:#ffffff;margin:0;font-size:22px;font-weight:800;letter-spacing:-0.5px;">News Intelligence</h1>
+      <p style="color:#94a3b8;margin:6px 0 0;font-size:13px;">{today} · {now_time}</p>
+
+      <!-- Stats Row -->
+      <div style="margin-top:20px;background:rgba(255,255,255,0.08);border-radius:12px;padding:14px;">
+        <table style="width:100%;border-collapse:collapse;"><tr>
+          <td style="text-align:center;width:25%;">
+            <div style="font-size:24px;font-weight:800;color:#ffffff;">{count}</div>
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-top:2px;">Stories</div>
+          </td>
+          <td style="text-align:center;width:25%;border-left:1px solid rgba(255,255,255,0.1);">
+            <div style="font-size:24px;font-weight:800;color:#ef4444;">{high}</div>
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-top:2px;">Critical</div>
+          </td>
+          <td style="text-align:center;width:25%;border-left:1px solid rgba(255,255,255,0.1);">
+            <div style="font-size:24px;font-weight:800;color:#f59e0b;">{med}</div>
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-top:2px;">Important</div>
+          </td>
+          <td style="text-align:center;width:25%;border-left:1px solid rgba(255,255,255,0.1);">
+            <div style="font-size:24px;font-weight:800;color:#22c55e;">{low}</div>
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:1px;margin-top:2px;">Notable</div>
+          </td>
+        </tr></table>
+      </div>
+    </div>
+
+    <!-- Topics Bar -->
+    <div style="background:#ffffff;border-radius:12px;padding:14px 20px;margin-bottom:12px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+      <div style="font-size:10px;color:#94a3b8;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:6px;font-weight:700;">Today's Topics</div>
+      <div style="font-size:13px;color:#475569;line-height:1.8;">{tag_summary}</div>
+    </div>
+
+    <!-- Articles -->
+    <div style="background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.06);">
+      <div style="padding:16px 20px 8px;border-bottom:1px solid #f1f5f9;">
+        <span style="font-size:14px;font-weight:700;color:#1e293b;">Top Stories</span>
+        <span style="font-size:12px;color:#94a3b8;margin-left:8px;">ranked by intelligence score</span>
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        {cards_html}
+      </table>
+    </div>
+
+    <!-- Footer -->
+    <div style="text-align:center;padding:20px 16px;margin-top:8px;">
+      <p style="color:#94a3b8;font-size:11px;margin:0;">
+        Powered by <strong style="color:#64748b;">News Intelligence Agent</strong>
+      </p>
+      <p style="color:#cbd5e1;font-size:10px;margin:4px 0 0;">
+        Scanning 600+ sources · Scoring & ranking with AI · Delivered daily
+      </p>
+    </div>
+
+  </div>
+</body>
+</html>"""
 
 
 def send_email_digest() -> bool:
@@ -268,7 +330,6 @@ def send_email_digest() -> bool:
 
     # Get top articles — prefer ones with real links, cap at 15
     raw_articles = database.get_recent(limit=100, min_priority=config.MIN_PRIORITY_SCORE)
-    # Prioritise articles with real links
     with_links = [a for a in raw_articles if _has_real_link(a.get("url", ""))]
     without_links = [a for a in raw_articles if not _has_real_link(a.get("url", ""))]
     articles = (with_links + without_links)[:15]
@@ -277,13 +338,16 @@ def send_email_digest() -> bool:
         return False
 
     today = datetime.now().strftime("%b %d")
-    subject = f"📡 News Digest — {today} — {len(articles)} top stories"
+    high = sum(1 for a in articles if a.get("priority", 0) >= 70)
+    subject = f"📡 {today} — {len(articles)} stories"
+    if high:
+        subject += f" ({high} critical)"
 
     # Build both plain text and HTML versions
     plain_lines = [f"NEWS INTELLIGENCE DIGEST — {today}", f"{len(articles)} top stories\n", "=" * 50, ""]
-    for a in articles:
+    for i, a in enumerate(articles):
         emoji = "🔴" if a["priority"] >= 70 else "🟡" if a["priority"] >= 50 else "🟢"
-        plain_lines.append(f"{emoji} [{a['priority']}] {unescape(a['title'])}")
+        plain_lines.append(f"#{i+1} {emoji} [{a['priority']}] {unescape(a['title'])}")
         plain_lines.append(f"   {unescape(a.get('summary', ''))}")
         plain_lines.append(f"   📰 {a['source']}  🔗 {a.get('url', '')}")
         plain_lines.append("")
@@ -309,7 +373,6 @@ def send_email_digest() -> bool:
 
 
 def should_send_digest() -> bool:
-    """Check if current time matches the configured digest time (within 2-min window)."""
     if not config.EMAIL_ENABLED:
         return False
     now = datetime.now()
