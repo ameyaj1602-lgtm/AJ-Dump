@@ -379,9 +379,18 @@ def send_email_digest() -> bool:
         logger.info("No articles for email digest")
         return False
 
-    today = datetime.now().strftime("%b %d")
+    now = datetime.now()
+    today = now.strftime("%b %d")
+    hour = now.hour
+    if hour < 12:
+        period = "Morning"
+    elif hour < 17:
+        period = "Afternoon"
+    else:
+        period = "Evening"
+
     high = sum(1 for a in articles if a.get("priority", 0) >= 70)
-    subject = f"📡 {today} — {len(articles)} stories"
+    subject = f"📡 {period} Digest · {today} — {len(articles)} stories"
     if high:
         subject += f" ({high} critical)"
 

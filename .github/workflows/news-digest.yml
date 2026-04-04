@@ -2,8 +2,13 @@ name: News Intelligence Agent
 
 on:
   schedule:
-    # Run every 2 hours — GitHub Actions cron (free, runs on GitHub servers)
-    - cron: '0 */2 * * *'
+    # 3 digests/day — fetch fresh news + send email each time
+    # 3:00 UTC  = 8:30 AM IST  (Morning)
+    # 8:00 UTC  = 1:30 PM IST  (Afternoon)
+    # 14:00 UTC = 7:30 PM IST  (Evening)
+    - cron: '0 3 * * *'
+    - cron: '0 8 * * *'
+    - cron: '0 14 * * *'
   workflow_dispatch: # Manual trigger button on GitHub
 
 jobs:
@@ -45,7 +50,7 @@ jobs:
           echo "TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}" >> .env
           echo "MIN_PRIORITY_SCORE=40" >> .env
 
-      # Restore DB from previous run (persistence across runs)
+      # Restore DB from previous run
       - name: Restore news database
         uses: actions/cache@v4
         with:
@@ -54,22 +59,14 @@ jobs:
           restore-keys: |
             news-db-
 
-      # Run the agent — fetch, score, store
+      # Fetch, score, store
       - name: Fetch and analyse news
         run: python main.py --once
         timeout-minutes: 10
 
-      # Send email digest at 3 AM UTC (~8:30 AM IST)
-      - name: Send email digest (morning only)
-        if: github.event.schedule == '0 */2 * * *'
-        run: |
-          HOUR=$(date -u +%H)
-          if [ "$HOUR" = "03" ]; then
-            echo "Sending morning digest..."
-            python main.py --email
-          else
-            echo "Not digest hour ($HOUR UTC), skipping email"
-          fi
+      # Always send email — every run is a digest
+      - name: Send email digest
+        run: python main.py --email
         timeout-minutes: 3
 
       # Save DB for next run
@@ -80,7 +77,6 @@ jobs:
           path: news-agent/news.db
           key: news-db-${{ github.run_number }}
 
-      # Upload DB as artifact (backup, downloadable)
       - name: Upload database artifact
         uses: actions/upload-artifact@v4
         if: always()
