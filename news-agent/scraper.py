@@ -29,6 +29,8 @@ async def scrape_reddit(client: httpx.AsyncClient) -> list[RawArticle]:
         "worldnews", "technology", "business", "news",
         "artificial", "startups", "science", "economics",
         "geopolitics", "futurology", "india", "singularity",
+        "machinelearning", "programming", "cybersecurity",
+        "spacex", "energy", "climate",
     ]
     articles: list[RawArticle] = []
     for sub in subreddits:
@@ -185,6 +187,34 @@ async def scrape_twitter_trends(client: httpx.AsyncClient) -> list[RawArticle]:
     return articles
 
 
+# ── Product Hunt ─────────────────────────────────────────────────────────────
+
+async def scrape_producthunt(client: httpx.AsyncClient) -> list[RawArticle]:
+    articles: list[RawArticle] = []
+    try:
+        resp = await client.get(
+            "https://www.producthunt.com/",
+            headers=_HEADERS, timeout=15,
+        )
+        if resp.status_code != 200:
+            return []
+        pattern = re.compile(r'<a[^>]*href="(/posts/[^"]+)"[^>]*>([^<]{10,100})</a>', re.I)
+        seen = set()
+        for match in pattern.finditer(resp.text):
+            path, title = match.group(1), unescape(match.group(2).strip())
+            if title and title not in seen:
+                seen.add(title)
+                articles.append(RawArticle(
+                    title=title,
+                    url=f"https://www.producthunt.com{path}",
+                    source="Product Hunt",
+                ))
+        logger.info("Product Hunt → %d items", len(articles))
+    except Exception as exc:
+        logger.debug("Product Hunt failed: %s", str(exc)[:60])
+    return articles
+
+
 # ── Public API ────────────────────────────────────────────────────────────────
 
 async def scrape_all() -> list[RawArticle]:
@@ -196,6 +226,7 @@ async def scrape_all() -> list[RawArticle]:
             ("Google News", scrape_google_news(client)),
             ("News Sites", scrape_news_sites(client)),
             ("Twitter", scrape_twitter_trends(client)),
+            ("ProductHunt", scrape_producthunt(client)),
         ]
 
         articles: list[RawArticle] = []

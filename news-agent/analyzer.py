@@ -9,7 +9,9 @@ v2: Improved quality — stronger junk filter, source tiers, freshness boost,
 import asyncio
 import json
 import logging
+import math
 import re
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from html import unescape
 
@@ -138,6 +140,11 @@ _KILL_PATTERNS = [
     "recipe:", "recipes for", "cooking tips",
     "daily briefing", "morning briefing", "evening briefing",
     "newsletter signup", "subscribe now",
+    "celebrity", "kardashian", "bachelor", "bachelorette",
+    "box office", "movie review", "tv recap", "season finale",
+    "fashion week", "red carpet", "outfit",
+    "lottery", "sweepstakes", "giveaway",
+    "astrology", "zodiac", "tarot",
 ]
 
 # Strong penalty: -40
@@ -170,18 +177,25 @@ _LOW_VALUE = [
     "ipl ", "ipl:", "cricket score", "match preview", "match prediction",
     "daily digest", "morning news", "evening news",
     "what's new in", "what's coming",
+    "trending on x:", "trending on twitter",
+    "meme", "viral video", "tiktok",
+    "deals roundup", "sale alert", "price drop",
 ]
 
-# Source quality tiers
+# Source quality tiers (aggressive — tier1 gets massive boost)
 _TIER1_SOURCES = [
     "reuters", "bbc", "al jazeera", "guardian", "financial times",
     "wall street journal", "new york times", "washington post",
-    "economist", "bloomberg",
+    "economist", "bloomberg", "associated press", "afp",
 ]
 _TIER2_SOURCES = [
     "techcrunch", "ars technica", "the verge", "wired", "cnbc",
     "hacker news", "economic times", "indian express", "times of india",
     "cnn", "npr", "livemint", "moneycontrol", "the hindu",
+    "venturebeat", "zdnet", "science daily", "phys.org",
+]
+_TIER3_NOISE = [
+    "trends24", "twitter/x trends", "product hunt",
 ]
 
 
@@ -257,16 +271,18 @@ def _heuristic_score(article: RawArticle) -> dict:
     # ── Title quality ──
     score += _title_quality_score(title)
 
-    # ── Source quality (tiered) ──
+    # ── Source quality (tiered — heavily rewards quality journalism) ──
     source_lower = article.source.lower()
     if any(s in source_lower for s in _TIER1_SOURCES):
-        score += 20
+        score += 30
     elif any(s in source_lower for s in _TIER2_SOURCES):
-        score += 12
+        score += 18
     elif source_lower.startswith("r/"):
         score += 8
     elif "google news" in source_lower:
         score += 5
+    elif any(s in source_lower for s in _TIER3_NOISE):
+        score -= 15
 
     # ── URGENCY (strong — +30) ──
     for w in ["breaking:", "just in:", "urgent:", "developing:", "alert:"]:
@@ -422,6 +438,99 @@ def _passes_filters(article: RawArticle, analysis: dict) -> bool:
     return any(kw.lower() in text for kw in config.FILTER_KEYWORDS)
 
 
+# ── TF-IDF Clustering (zero dependencies) ───────────────────────────────────
+
+_STOP_WORDS = frozenset([
+    "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "can", "shall", "to", "of", "in", "for",
+    "on", "with", "at", "by", "from", "as", "into", "through", "during",
+    "before", "after", "above", "below", "between", "under", "again",
+    "further", "then", "once", "here", "there", "when", "where", "why",
+    "how", "all", "each", "every", "both", "few", "more", "most", "other",
+    "some", "such", "no", "nor", "not", "only", "own", "same", "so",
+    "than", "too", "very", "and", "but", "or", "if", "while", "about",
+    "up", "out", "off", "over", "its", "it", "this", "that", "these",
+    "those", "what", "which", "who", "whom", "new", "says", "said",
+    "also", "just", "like", "get", "gets", "got", "one", "two", "first",
+])
+
+
+def _tokenize(text: str) -> list[str]:
+    words = re.findall(r'[a-z]{2,}', text.lower())
+    return [w for w in words if w not in _STOP_WORDS]
+
+
+def _cluster_articles(articles: list['AnalysedArticle'], threshold: float = 0.30) -> list['AnalysedArticle']:
+    """Cluster articles using TF-IDF cosine similarity. Assigns cluster_id to each."""
+    if len(articles) < 2:
+        return articles
+
+    # Tokenize all articles
+    docs = [_tokenize(f"{a.title} {a.summary}") for a in articles]
+
+    # Build IDF
+    doc_count = len(docs)
+    df: Counter = Counter()
+    for doc in docs:
+        for word in set(doc):
+            df[word] += 1
+    idf = {word: math.log(doc_count / count) for word, count in df.items()}
+
+    # Build TF-IDF vectors
+    vectors: list[dict[str, float]] = []
+    for doc in docs:
+        tf = Counter(doc)
+        total = len(doc) or 1
+        vec = {w: (c / total) * idf.get(w, 0) for w, c in tf.items()}
+        vectors.append(vec)
+
+    def _cosine(a: dict, b: dict) -> float:
+        keys = set(a) & set(b)
+        if not keys:
+            return 0.0
+        dot = sum(a[k] * b[k] for k in keys)
+        mag_a = math.sqrt(sum(v * v for v in a.values()))
+        mag_b = math.sqrt(sum(v * v for v in b.values()))
+        if mag_a == 0 or mag_b == 0:
+            return 0.0
+        return dot / (mag_a * mag_b)
+
+    # Greedy clustering — assign each article to existing cluster or create new
+    cluster_map: list[int] = [-1] * len(articles)
+    cluster_reps: list[int] = []  # index of representative article per cluster
+    cluster_labels: list[str] = []
+
+    for i in range(len(articles)):
+        best_cluster = -1
+        best_sim = threshold
+        for ci, rep in enumerate(cluster_reps):
+            sim = _cosine(vectors[i], vectors[rep])
+            if sim > best_sim:
+                best_sim = sim
+                best_cluster = ci
+        if best_cluster >= 0:
+            cluster_map[i] = best_cluster
+        else:
+            cluster_map[i] = len(cluster_reps)
+            # Label from top 2 TF-IDF terms
+            top_terms = sorted(vectors[i].items(), key=lambda x: x[1], reverse=True)[:2]
+            label = "-".join(t[0] for t in top_terms) if top_terms else "misc"
+            cluster_reps.append(i)
+            cluster_labels.append(label)
+
+    for i, a in enumerate(articles):
+        a.cluster_id = cluster_labels[cluster_map[i]]
+
+    # Count cluster sizes for logging
+    cluster_sizes = Counter(cluster_map)
+    multi = sum(1 for v in cluster_sizes.values() if v > 1)
+    logger.info("Clustering: %d articles → %d clusters (%d with 2+ articles)",
+                len(articles), len(cluster_reps), multi)
+
+    return articles
+
+
 # ── Source Diversity ─────────────────────────────────────────────────────────
 
 def _enforce_source_diversity(articles: list['AnalysedArticle'], max_per_source: int = 3) -> list['AnalysedArticle']:
@@ -445,8 +554,29 @@ async def analyse(articles: list[RawArticle]) -> list[AnalysedArticle]:
 
     has_llm = config.GEMINI_API_KEY or config.OPENAI_API_KEY
 
+    # Load source quality from recent history (auto-boost proven sources)
+    try:
+        import database
+        _source_quality = database.get_source_quality_scores()
+    except Exception:
+        _source_quality = {}
+
     # Step 1: Heuristic score everything
     heuristic_results = [_heuristic_score(a) for a in articles]
+
+    # Step 1.5: Apply dynamic source quality boost
+    if _source_quality:
+        for i, article in enumerate(articles):
+            src = article.source
+            if src in _source_quality:
+                avg = _source_quality[src]
+                if avg >= 65:
+                    heuristic_results[i]["priority"] = min(100, heuristic_results[i].get("priority", 0) + 12)
+                elif avg >= 50:
+                    heuristic_results[i]["priority"] = min(100, heuristic_results[i].get("priority", 0) + 6)
+                elif avg < 25:
+                    heuristic_results[i]["priority"] = max(0, heuristic_results[i].get("priority", 0) - 10)
+        logger.info("Dynamic source boost applied from %d tracked sources", len(_source_quality))
 
     if not has_llm:
         logger.info("No LLM key — using heuristic scoring for %d articles", len(articles))
@@ -511,6 +641,9 @@ async def analyse(articles: list[RawArticle]) -> list[AnalysedArticle]:
 
     # Source diversity — max 3 from same source
     analysed = _enforce_source_diversity(analysed, max_per_source=3)
+
+    # Cluster related stories
+    analysed = _cluster_articles(analysed)
 
     logger.info("Analysis: %d articles passed filters (min score %d)", len(analysed), config.MIN_PRIORITY_SCORE)
     return analysed

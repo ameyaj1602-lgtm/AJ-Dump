@@ -150,6 +150,49 @@ async def run_loop():
     logger.info("Agent stopped.")
 
 
+# ── CLI: Briefing ─────────────────────────────────────────────────────────────
+
+def show_briefing():
+    """Quick 30-second briefing — top 10 stories, zero noise."""
+    from html import unescape
+    articles = database.get_recent(100, min_priority=50)
+
+    # Deduplicate by cluster — best per cluster
+    seen: dict[str, dict] = {}
+    for a in articles:
+        cluster = (a.get("cluster_id") or "").strip()
+        key = cluster if cluster else a.get("title", "")[:30]
+        if key not in seen or a.get("priority", 0) > seen[key].get("priority", 0):
+            seen[key] = a
+    top = sorted(seen.values(), key=lambda x: x.get("priority", 0), reverse=True)[:10]
+
+    if not top:
+        print("  No high-priority stories yet. Run: python main.py --once")
+        return
+
+    try:
+        width = max(__import__("shutil").get_terminal_size().columns, 60)
+    except Exception:
+        width = 80
+    width = min(width, 100)
+
+    print()
+    print(f"  ⚡ BRIEFING — Top {len(top)} stories")
+    print(f"  {'─' * (width - 4)}")
+
+    for i, a in enumerate(top):
+        p = a["priority"]
+        dot = "🔴" if p >= 70 else "🟡" if p >= 50 else "🟢"
+        title = unescape(a["title"])[:width - 16]
+        source = (a.get("source") or "")[:20]
+        print(f"  {dot} {i+1:2d}. {title}")
+        print(f"      {source} · Score: {p}/100")
+        print()
+
+    print(f"  {'─' * (width - 4)}")
+    print(f"  Full view: python main.py --web → http://localhost:8000/briefing\n")
+
+
 # ── CLI: Dashboard ────────────────────────────────────────────────────────────
 
 def show_dashboard():
@@ -176,13 +219,28 @@ def main():
     parser = argparse.ArgumentParser(description="Real-Time News Intelligence Agent")
     parser.add_argument("--once", action="store_true", help="Run one cycle and exit")
     parser.add_argument("--dashboard", action="store_true", help="Show recent alerts")
+    parser.add_argument("--briefing", action="store_true", help="Quick 30-second briefing — top stories only")
     parser.add_argument("--email", action="store_true", help="Send email digest now")
+    parser.add_argument("--web", action="store_true", help="Launch web dashboard on port 8000")
+    parser.add_argument("--port", type=int, default=8000, help="Port for web dashboard")
     args = parser.parse_args()
 
-    if args.email:
+    if args.web:
+        import uvicorn
+        from dashboard import app
+        print("\n  ╔══════════════════════════════════════╗")
+        print("  ║  📡 News Intelligence Dashboard      ║")
+        print(f"  ║  http://localhost:{args.port:<19} ║")
+        print("  ╚══════════════════════════════════════╝\n")
+        uvicorn.run(app, host="0.0.0.0", port=args.port)
+        return
+    elif args.email:
         ok = notifier.send_email_digest()
         if not ok:
             print("Failed — check EMAIL_* settings in .env")
+        return
+    elif args.briefing:
+        show_briefing()
         return
     elif args.dashboard:
         show_dashboard()

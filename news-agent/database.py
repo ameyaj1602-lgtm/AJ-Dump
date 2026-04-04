@@ -131,6 +131,133 @@ def cleanup_old(max_age_hours: int = 48) -> int:
     return cursor.rowcount
 
 
+def get_article_count() -> int:
+    row = _get_conn().execute("SELECT COUNT(*) as c FROM articles").fetchone()
+    return row["c"] if row else 0
+
+
+def get_tag_distribution() -> list[dict]:
+    """Return tag counts across all articles."""
+    rows = _get_conn().execute(
+        "SELECT tags FROM articles WHERE tags IS NOT NULL AND tags != ''"
+    ).fetchall()
+    from collections import Counter
+    tag_counts: Counter = Counter()
+    for row in rows:
+        for tag in row["tags"].split(","):
+            tag = tag.strip()
+            if tag:
+                tag_counts[tag] += 1
+    return [{"tag": t, "count": c} for t, c in tag_counts.most_common(20)]
+
+
+def get_source_stats() -> list[dict]:
+    """Return article count and avg priority per source."""
+    rows = _get_conn().execute("""
+        SELECT source,
+               COUNT(*) as count,
+               ROUND(AVG(priority), 1) as avg_priority,
+               MAX(priority) as max_priority
+        FROM articles
+        GROUP BY source
+        ORDER BY count DESC
+        LIMIT 30
+    """).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_priority_distribution() -> dict:
+    """Return count of articles in each priority band."""
+    rows = _get_conn().execute("""
+        SELECT
+            SUM(CASE WHEN priority >= 70 THEN 1 ELSE 0 END) as high,
+            SUM(CASE WHEN priority >= 50 AND priority < 70 THEN 1 ELSE 0 END) as medium,
+            SUM(CASE WHEN priority >= 30 AND priority < 50 THEN 1 ELSE 0 END) as low,
+            SUM(CASE WHEN priority < 30 THEN 1 ELSE 0 END) as minimal
+        FROM articles
+    """).fetchone()
+    return dict(rows) if rows else {"high": 0, "medium": 0, "low": 0, "minimal": 0}
+
+
+def get_timeline(hours: int = 48, bucket_minutes: int = 60) -> list[dict]:
+    """Return article counts bucketed by time."""
+    import time as _time
+    cutoff = _time.time() - (hours * 3600)
+    rows = _get_conn().execute("""
+        SELECT
+            CAST((created_at - ?) / ? AS INTEGER) as bucket,
+            COUNT(*) as count,
+            ROUND(AVG(priority), 1) as avg_priority
+        FROM articles
+        WHERE created_at >= ?
+        GROUP BY bucket
+        ORDER BY bucket
+    """, (cutoff, bucket_minutes * 60, cutoff)).fetchall()
+    results = []
+    for r in rows:
+        bucket_start = cutoff + r["bucket"] * bucket_minutes * 60
+        from datetime import datetime
+        results.append({
+            "time": datetime.fromtimestamp(bucket_start).strftime("%Y-%m-%d %H:%M"),
+            "count": r["count"],
+            "avg_priority": r["avg_priority"],
+        })
+    return results
+
+
+def get_clusters() -> list[dict]:
+    """Return clusters with their articles, sorted by avg priority."""
+    rows = _get_conn().execute("""
+        SELECT cluster_id,
+               COUNT(*) as count,
+               ROUND(AVG(priority), 1) as avg_priority,
+               MAX(priority) as top_priority,
+               GROUP_CONCAT(title, '|||') as titles
+        FROM articles
+        WHERE cluster_id IS NOT NULL AND cluster_id != ''
+        GROUP BY cluster_id
+        HAVING count > 1
+        ORDER BY avg_priority DESC
+        LIMIT 20
+    """).fetchall()
+    results = []
+    for r in rows:
+        titles = (r["titles"] or "").split("|||")[:5]
+        results.append({
+            "cluster_id": r["cluster_id"],
+            "count": r["count"],
+            "avg_priority": r["avg_priority"],
+            "top_priority": r["top_priority"],
+            "sample_titles": titles,
+        })
+    return results
+
+
+def search_articles(query: str, limit: int = 30) -> list[dict]:
+    """Full-text search across title and summary."""
+    pattern = f"%{query}%"
+    rows = _get_conn().execute(
+        "SELECT * FROM articles WHERE title LIKE ? OR summary LIKE ? ORDER BY priority DESC LIMIT ?",
+        (pattern, pattern, limit),
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_source_quality_scores() -> dict[str, float]:
+    """Return avg priority per source from last 24h — used to auto-boost good sources."""
+    import time as _time
+    cutoff = _time.time() - 86400
+    rows = _get_conn().execute("""
+        SELECT source, AVG(priority) as avg_p, COUNT(*) as cnt
+        FROM articles
+        WHERE created_at >= ? AND priority > 0
+        GROUP BY source
+        HAVING cnt >= 3
+        ORDER BY avg_p DESC
+    """, (cutoff,)).fetchall()
+    return {r["source"]: round(r["avg_p"], 1) for r in rows}
+
+
 def close() -> None:
     global _conn
     if _conn:

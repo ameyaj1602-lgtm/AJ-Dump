@@ -3,6 +3,11 @@
 
 # SQLite database
 *.db
+*.db-shm
+*.db-wal
+
+# Logs
+agent.log
 
 # Node.js
 node_modules/
