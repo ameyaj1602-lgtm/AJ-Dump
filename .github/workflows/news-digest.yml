@@ -1,12 +1,13 @@
-name: Daily News Digest
+name: News Intelligence Agent
 
 on:
   schedule:
-    - cron: '0 3 * * *'
-  workflow_dispatch:
+    # Run every 2 hours — GitHub Actions cron (free, runs on GitHub servers)
+    - cron: '0 */2 * * *'
+  workflow_dispatch: # Manual trigger button on GitHub
 
 jobs:
-  send-digest:
+  news-cycle:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -20,9 +21,11 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: news-agent/requirements.txt
 
       - name: Install dependencies
-        run: pip install feedparser httpx python-dotenv
+        run: pip install -r requirements.txt
 
       - name: Create .env file
         env:
@@ -30,18 +33,58 @@ jobs:
           EMAIL_PASSWORD: ${{ secrets.EMAIL_PASSWORD }}
           EMAIL_TO: ${{ secrets.EMAIL_TO }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           echo "EMAIL_ENABLED=true" > .env
           echo "EMAIL_FROM=${EMAIL_FROM}" >> .env
           echo "EMAIL_PASSWORD=${EMAIL_PASSWORD}" >> .env
           echo "EMAIL_TO=${EMAIL_TO}" >> .env
           echo "GEMINI_API_KEY=${GEMINI_API_KEY}" >> .env
+          echo "TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}" >> .env
+          echo "TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}" >> .env
           echo "MIN_PRIORITY_SCORE=40" >> .env
 
-      - name: Fetch news
-        run: python main.py --once
-        timeout-minutes: 5
+      # Restore DB from previous run (persistence across runs)
+      - name: Restore news database
+        uses: actions/cache@v4
+        with:
+          path: news-agent/news.db
+          key: news-db-${{ github.run_number }}
+          restore-keys: |
+            news-db-
 
-      - name: Send email digest
-        run: python main.py --email
-        timeout-minutes: 2
+      # Run the agent — fetch, score, store
+      - name: Fetch and analyse news
+        run: python main.py --once
+        timeout-minutes: 10
+
+      # Send email digest at 3 AM UTC (~8:30 AM IST)
+      - name: Send email digest (morning only)
+        if: github.event.schedule == '0 */2 * * *'
+        run: |
+          HOUR=$(date -u +%H)
+          if [ "$HOUR" = "03" ]; then
+            echo "Sending morning digest..."
+            python main.py --email
+          else
+            echo "Not digest hour ($HOUR UTC), skipping email"
+          fi
+        timeout-minutes: 3
+
+      # Save DB for next run
+      - name: Save news database
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: news-agent/news.db
+          key: news-db-${{ github.run_number }}
+
+      # Upload DB as artifact (backup, downloadable)
+      - name: Upload database artifact
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: news-db-${{ github.run_id }}
+          path: news-agent/news.db
+          retention-days: 7
