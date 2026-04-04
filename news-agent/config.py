@@ -36,19 +36,23 @@ EMAIL_DIGEST_MINUTE = int(os.getenv("EMAIL_DIGEST_MINUTE", "30"))
 # ── Polling ───────────────────────────────────────────────────────────────────
 POLL_INTERVAL_SECONDS = int(os.getenv("POLL_INTERVAL_SECONDS", "120"))
 
-# ── RSS Feeds (expanded — 20+ sources) ────────────────────────────────────────
+# ── RSS Feeds (40+ sources — wire + global + India + AI + science) ────────────
 RSS_FEEDS = [
+    # Wire-level (fastest, most genuine news sources)
+    "https://feeds.apnews.com/rss/apf-topnews",
+    "https://feeds.apnews.com/rss/apf-business",
+    "https://www.reutersagency.com/feed/",
+    "https://feeds.reuters.com/reuters/topNews",
     # Global top news
     "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en",
     "https://news.google.com/rss?hl=en-IN&gl=IN&ceid=IN:en",
     "https://feeds.bbci.co.uk/news/rss.xml",
-    "https://rss.cnn.com/rss/edition.rss",
+    "https://feeds.bbci.co.uk/news/business/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
     "https://www.theguardian.com/world/rss",
     "https://rss.nytimes.com/services/xml/rss/nyt/HomePage.xml",
     "https://feeds.washingtonpost.com/rss/world",
     "https://feeds.npr.org/1001/rss.xml",
-    "https://feeds.reuters.com/reuters/topNews",
     # Tech
     "https://techcrunch.com/feed/",
     "https://feeds.arstechnica.com/arstechnica/index",
@@ -63,6 +67,8 @@ RSS_FEEDS = [
     "https://openai.com/blog/rss.xml",
     "https://blog.google/technology/ai/rss/",
     "https://huggingface.co/blog/feed.xml",
+    "https://www.artificialintelligence-news.com/feed/",
+    "https://venturebeat.com/category/ai/feed/",
     # Finance / Business
     "https://search.cnbc.com/rs/search/combinedcms/view.xml?partnerId=wrss01&id=100003114",
     "https://feeds.bloomberg.com/markets/news.rss",
@@ -79,9 +85,7 @@ RSS_FEEDS = [
     "https://www.livemint.com/rss/news",
     "https://www.livemint.com/rss/companies",
     "https://www.livemint.com/rss/technology",
-    "https://www.business-standard.com/rss/home_page_top_stories.rss",
     "https://www.moneycontrol.com/rss/latestnews.xml",
-    "https://www.ndtv.com/rss/top-stories",
     # Hacker News
     "https://hnrss.org/frontpage",
 ]
